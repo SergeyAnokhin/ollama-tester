@@ -1,0 +1,271 @@
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+import httpx
+import psutil
+import asyncio
+import json
+import time
+import uuid
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+OLLAMA_BASE = "http://localhost:11434"
+sessions: dict[str, dict] = {}
+
+
+@app.get("/api/models")
+async def list_models():
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(f"{OLLAMA_BASE}/api/tags")
+            data = r.json()
+            return {"models": [m["name"] for m in data.get("models", [])]}
+    except Exception as e:
+        return {"models": [], "error": str(e)}
+
+
+def _collect_stats() -> dict:
+    cpu = psutil.cpu_percent()
+    mem = psutil.virtual_memory()
+    ollama_cpu = 0.0
+    ollama_mem = 0
+
+    for proc in psutil.process_iter(["name", "cpu_percent", "memory_info"]):
+        try:
+            if "ollama" in (proc.info["name"] or "").lower():
+                ollama_cpu += proc.info["cpu_percent"] or 0
+                mi = proc.info["memory_info"]
+                if mi:
+                    ollama_mem += mi.rss
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    return {
+        "type": "system_stats",
+        "cpu": round(cpu, 1),
+        "memPercent": round(mem.percent, 1),
+        "memUsedGb": round(mem.used / 1024**3, 1),
+        "memTotalGb": round(mem.total / 1024**3, 1),
+        "ollamaCpu": round(ollama_cpu, 1),
+        "ollamaMemMb": round(ollama_mem / 1024**2, 1),
+    }
+
+
+async def _stats_sender(ws: WebSocket, done: asyncio.Event):
+    psutil.cpu_percent()
+    await asyncio.sleep(0.5)
+    while not done.is_set():
+        try:
+            await ws.send_json(_collect_stats())
+        except Exception:
+            return
+        await asyncio.sleep(2)
+
+
+async def _run_generate(
+    model: str,
+    prompt: str,
+    images: list[str],
+    ws: WebSocket,
+    test_num: int,
+) -> tuple[float, str]:
+    payload = {"model": model, "prompt": prompt, "images": images, "stream": True}
+    start = time.monotonic()
+    tokens: list[str] = []
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(600)) as client:
+        async with client.stream(
+            "POST", f"{OLLAMA_BASE}/api/generate", json=payload
+        ) as resp:
+            async for raw in resp.aiter_lines():
+                if not raw:
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                token = obj.get("response", "")
+                if token:
+                    tokens.append(token)
+                    elapsed = time.monotonic() - start
+                    try:
+                        await ws.send_json(
+                            {
+                                "type": "test_token",
+                                "model": model,
+                                "testNum": test_num,
+                                "elapsed": round(elapsed, 1),
+                                "preview": "".join(tokens)[-400:],
+                            }
+                        )
+                    except Exception:
+                        pass
+                if obj.get("done"):
+                    break
+
+    return round(time.monotonic() - start, 2), "".join(tokens)
+
+
+@app.websocket("/ws/test")
+async def ws_test(ws: WebSocket):
+    await ws.accept()
+    done_event = asyncio.Event()
+
+    # Pause/stop control events
+    # paused_event SET   = running normally
+    # paused_event CLEAR = paused, waiting for resume
+    paused_event = asyncio.Event()
+    paused_event.set()
+    stop_event = asyncio.Event()
+
+    # Receive initial config first, then start control listener
+    try:
+        cfg = await ws.receive_json()
+    except Exception:
+        return
+
+    async def _listen_controls() -> None:
+        """Receives pause/resume/stop messages from client while tests run."""
+        while not done_event.is_set():
+            try:
+                msg = await ws.receive_json()
+                action = msg.get("action", "")
+                if action == "pause":
+                    paused_event.clear()
+                    await ws.send_json({"type": "paused"})
+                elif action == "resume":
+                    paused_event.set()
+                    await ws.send_json({"type": "resumed"})
+                elif action == "stop":
+                    stop_event.set()
+                    paused_event.set()  # unblock if currently paused
+                    await ws.send_json({"type": "stopping"})
+            except Exception:
+                break
+
+    control_task = asyncio.create_task(_listen_controls())
+
+    try:
+        models: list[str] = cfg["models"]
+        prompt: str = cfg["prompt"]
+        img1: str = cfg["image1"].split(",", 1)[-1]
+        img2: str = cfg["image2"].split(",", 1)[-1]
+
+        sid = str(uuid.uuid4())
+        await ws.send_json({"type": "session_started", "sessionId": sid})
+
+        asyncio.create_task(_stats_sender(ws, done_event))
+
+        all_results: list[dict] = []
+
+        for idx, model in enumerate(models):
+            # Check pause/stop before starting each model
+            await paused_event.wait()
+            if stop_event.is_set():
+                break
+
+            await ws.send_json(
+                {
+                    "type": "model_start",
+                    "model": model,
+                    "modelIndex": idx,
+                    "totalModels": len(models),
+                }
+            )
+
+            model_tests: list[dict] = []
+            test_defs = [
+                (1, [img1], "Image 1"),
+                (2, [img2], "Image 2"),
+                (3, [img1, img2], "Image 1 + 2"),
+            ]
+
+            model_stopped = False
+            for test_num, images, desc in test_defs:
+                # Check pause/stop before each individual test
+                await paused_event.wait()
+                if stop_event.is_set():
+                    model_stopped = True
+                    break
+
+                await ws.send_json(
+                    {
+                        "type": "test_start",
+                        "model": model,
+                        "testNum": test_num,
+                        "description": desc,
+                    }
+                )
+                try:
+                    duration, response = await _run_generate(
+                        model, prompt, images, ws, test_num
+                    )
+                except Exception as exc:
+                    duration, response = 0.0, f"Error: {exc}"
+
+                await ws.send_json(
+                    {
+                        "type": "test_complete",
+                        "model": model,
+                        "testNum": test_num,
+                        "duration": duration,
+                        "response": response,
+                    }
+                )
+                model_tests.append(
+                    {
+                        "testNum": test_num,
+                        "description": desc,
+                        "duration": duration,
+                        "response": response,
+                    }
+                )
+
+            if model_tests:
+                all_results.append({"model": model, "tests": model_tests})
+
+            if model_stopped or stop_event.is_set():
+                break
+
+        done_event.set()
+        was_stopped = stop_event.is_set()
+
+        sessions[sid] = {
+            "id": sid,
+            "prompt": prompt,
+            "models": models,
+            "results": all_results,
+        }
+        await ws.send_json(
+            {
+                "type": "all_complete",
+                "sessionId": sid,
+                "results": all_results,
+                "stopped": was_stopped,
+            }
+        )
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        try:
+            await ws.send_json({"type": "error", "message": str(exc)})
+        except Exception:
+            pass
+    finally:
+        done_event.set()
+        control_task.cancel()
+
+
+@app.get("/api/results/{session_id}")
+async def get_results(session_id: str):
+    if session_id not in sessions:
+        return {"error": "not found"}
+    return sessions[session_id]
