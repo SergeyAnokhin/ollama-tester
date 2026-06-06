@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 import psutil
@@ -20,13 +20,78 @@ OLLAMA_BASE = "http://localhost:11434"
 sessions: dict[str, dict] = {}
 
 
+@app.get("/api/health")
+async def health():
+    ollama_ok = False
+    try:
+        async with httpx.AsyncClient(timeout=3) as client:
+            r = await client.get(f"{OLLAMA_BASE}/api/tags")
+            ollama_ok = r.status_code == 200
+    except Exception:
+        pass
+    return {"backend": True, "ollama": ollama_ok}
+
+
+def _parse_capabilities(show: dict) -> dict:
+    model_info = show.get("model_info", {})
+
+    # Newer Ollama (≥0.6) exposes capabilities directly — use it when available
+    capabilities = show.get("capabilities", [])
+    if capabilities:
+        has_vision = "vision" in capabilities
+        has_thinking = "thinking" in capabilities
+    else:
+        # Fallback for older Ollama: infer from model_info keys and template
+        details = show.get("details", {})
+        families = details.get("families", [])
+        primary = details.get("family", "").lower()
+        non_primary = [f for f in families if f.lower() != primary]
+        has_vision = bool(non_primary) or any(
+            any(vk in key.lower() for vk in ("clip.", ".vision.", "image_size", "image_mean", "patch_count"))
+            for key in model_info
+        )
+        t = show.get("template", "").lower()
+        has_thinking = "<think>" in t or ".thinking" in t or "{{if .thinking}}" in t
+
+    # Context length — architecture-agnostic
+    context_length: int | None = None
+    for key, val in model_info.items():
+        if key.endswith(".context_length"):
+            context_length = val
+            break
+
+    return {"has_vision": has_vision, "has_thinking": has_thinking, "context_length": context_length}
+
+
+async def _show_model(name: str) -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(f"{OLLAMA_BASE}/api/show", json={"name": name})
+            return r.json()
+    except Exception:
+        return {}
+
+
 @app.get("/api/models")
 async def list_models():
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             r = await client.get(f"{OLLAMA_BASE}/api/tags")
-            data = r.json()
-            return {"models": [m["name"] for m in data.get("models", [])]}
+            raw_models = r.json().get("models", [])
+
+        shows = await asyncio.gather(*[_show_model(m["name"]) for m in raw_models])
+
+        return {
+            "models": [
+                {
+                    "name": m["name"],
+                    "size": m.get("size", 0),
+                    "details": m.get("details", {}),
+                    **_parse_capabilities(show),
+                }
+                for m, show in zip(raw_models, shows)
+            ]
+        }
     except Exception as e:
         return {"models": [], "error": str(e)}
 
@@ -69,14 +134,42 @@ async def _stats_sender(ws: WebSocket, done: asyncio.Event):
         await asyncio.sleep(2)
 
 
+def _parse_keep_alive(val: str):
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return val
+
+
 async def _run_generate(
     model: str,
     prompt: str,
     images: list[str],
     ws: WebSocket,
     test_num: int,
+    llm_params: dict | None = None,
 ) -> tuple[float, str]:
-    payload = {"model": model, "prompt": prompt, "images": images, "stream": True}
+    payload: dict = {"model": model, "prompt": prompt, "images": images, "stream": True}
+
+    options: dict = {}
+    if llm_params:
+        for key in ("num_thread", "num_ctx", "num_predict", "temperature"):
+            val = llm_params.get(key)
+            if val is not None:
+                options[key] = val
+        keep_alive_raw = llm_params.get("keep_alive", "")
+        if keep_alive_raw not in (None, ""):
+            payload["keep_alive"] = _parse_keep_alive(str(keep_alive_raw))
+
+    if options:
+        payload["options"] = options
+
+    param_parts = [f"{k}={v}" for k, v in options.items()]
+    if "keep_alive" in payload:
+        param_parts.append(f"keep_alive={payload['keep_alive']!r}")
+    param_str = ", ".join(param_parts) if param_parts else "Ollama defaults"
+    print(f"[{model}] Test {test_num} | params: {param_str}", flush=True)
+
     start = time.monotonic()
     tokens: list[str] = []
 
@@ -173,6 +266,16 @@ async def ws_test(ws: WebSocket):
         prompt: str = cfg["prompt"]
         img1: str = cfg["image1"].split(",", 1)[-1]
         img2: str = cfg["image2"].split(",", 1)[-1]
+        img3_raw: str = cfg.get("image3", "")
+        img4_raw: str = cfg.get("image4", "")
+        img3: str = img3_raw.split(",", 1)[-1] if img3_raw else ""
+        img4: str = img4_raw.split(",", 1)[-1] if img4_raw else ""
+        llm_params: dict | None = cfg.get("llmParams")
+
+        loaded_images = [img1, img2] + ([img3] if img3 else []) + ([img4] if img4 else [])
+        individual_tests = [(i + 1, [img], f"Image {i + 1}") for i, img in enumerate(loaded_images)]
+        all_label = "Image 1 + 2" if len(loaded_images) == 2 else "All images"
+        test_defs = individual_tests + [(len(loaded_images) + 1, loaded_images, all_label)]
 
         sid = str(uuid.uuid4())
         await ws.send_json({"type": "session_started", "sessionId": sid})
@@ -193,16 +296,11 @@ async def ws_test(ws: WebSocket):
                     "model": model,
                     "modelIndex": idx,
                     "totalModels": len(models),
+                    "totalTests": len(test_defs),
                 }
             )
 
             model_tests: list[dict] = []
-            test_defs = [
-                (1, [img1], "Image 1"),
-                (2, [img2], "Image 2"),
-                (3, [img1, img2], "Image 1 + 2"),
-            ]
-
             model_stopped = False
             for test_num, images, desc in test_defs:
                 # Check pause/stop before each individual test
@@ -221,7 +319,7 @@ async def ws_test(ws: WebSocket):
                 )
 
                 task = asyncio.create_task(
-                    _run_generate(model, prompt, images, ws, test_num)
+                    _run_generate(model, prompt, images, ws, test_num, llm_params)
                 )
                 current_task.clear()
                 current_task.append(task)
@@ -242,6 +340,7 @@ async def ws_test(ws: WebSocket):
                         "type": "test_complete",
                         "model": model,
                         "testNum": test_num,
+                        "totalTests": len(test_defs),
                         "duration": duration,
                         "response": response,
                     }

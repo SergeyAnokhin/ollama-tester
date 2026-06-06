@@ -11,29 +11,42 @@ import {
   Cell,
 } from 'recharts'
 import { ArrowLeft, CheckCircle, Clock, Circle, Loader2, Pause, Play, Square } from 'lucide-react'
-import type { ModelResult, SystemStats, ModelStatus, ImageData } from '../types'
+import type { ModelResult, SystemStats, ModelStatus, ImageData, LlmParams } from '../types'
 
 interface Props {
   models: string[]
   prompt: string
   image1: ImageData
   image2: ImageData
+  image3: ImageData | null
+  image4: ImageData | null
   onComplete: (results: ModelResult[]) => void
   onBack: () => void
   sessionId: string
   onSessionUpdate: (id: string, results: ModelResult[], status: 'running' | 'complete' | 'stopped' | 'partial') => void
+  llmParams: LlmParams
 }
 
 interface LiveResult {
   model: string
-  testNum: 1 | 2 | 3
+  testNum: number
   duration: number
   response: string
 }
 
-const TEST_COLORS = ['#818cf8', '#34d399', '#fb923c']
-const TEST_LABELS = ['Image 1', 'Image 2', 'Image 1+2']
-const TEST_DESCRIPTIONS = ['Image 1', 'Image 2', 'Image 1 + 2']
+const ALL_COLORS = ['#818cf8', '#34d399', '#fb923c', '#f472b6', '#facc15']
+
+function getTestDefs(images: (ImageData | null)[]) {
+  const loaded = images.filter(Boolean) as ImageData[]
+  const defs = loaded.map((_, i) => ({
+    testNum: i + 1,
+    label: `Image ${i + 1}`,
+    color: ALL_COLORS[i],
+  }))
+  const allLabel = loaded.length === 2 ? 'Image 1+2' : 'All images'
+  defs.push({ testNum: loaded.length + 1, label: allLabel, color: ALL_COLORS[loaded.length] })
+  return defs
+}
 
 function buildModelResults(liveResults: LiveResult[], models: string[]): ModelResult[] {
   return models
@@ -44,7 +57,7 @@ function buildModelResults(liveResults: LiveResult[], models: string[]): ModelRe
         .filter(r => r.model === model)
         .map(r => ({
           testNum: r.testNum,
-          description: TEST_DESCRIPTIONS[r.testNum - 1],
+          description: `Test ${r.testNum}`,
           duration: r.duration,
           response: r.response,
         }))
@@ -105,12 +118,16 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   )
 }
 
-export default function TestingPage({ models, prompt, image1, image2, onComplete, onBack, sessionId, onSessionUpdate }: Props) {
+export default function TestingPage({ models, prompt, image1, image2, image3, image4, onComplete, onBack, sessionId, onSessionUpdate, llmParams }: Props) {
+  const images = [image1, image2, image3, image4]
+  const testDefs = useMemo(() => getTestDefs(images), [image1, image2, image3, image4]) // eslint-disable-line react-hooks/exhaustive-deps
+  const numTests = testDefs.length
+
   const [statuses, setStatuses] = useState<Record<string, ModelStatus>>(
     () => Object.fromEntries(models.map((m) => [m, 'pending'])),
   )
   const [activeModel, setActiveModel] = useState<string | null>(null)
-  const [activeTest, setActiveTest] = useState<1 | 2 | 3 | null>(null)
+  const [activeTest, setActiveTest] = useState<number | null>(null)
   const [preview, setPreview] = useState('')
   const [elapsed, setElapsed] = useState(0)
   const [completed, setCompleted] = useState<LiveResult[]>([])
@@ -154,14 +171,16 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
 
     ws.onopen = () => {
       setError(null)
-      ws.send(
-        JSON.stringify({
-          models,
-          prompt,
-          image1: image1.dataUrl,
-          image2: image2.dataUrl,
-        }),
-      )
+      const payload: Record<string, unknown> = {
+        models,
+        prompt,
+        image1: image1.dataUrl,
+        image2: image2.dataUrl,
+        llmParams,
+      }
+      if (image3) payload.image3 = image3.dataUrl
+      if (image4) payload.image4 = image4.dataUrl
+      ws.send(JSON.stringify(payload))
     }
 
     ws.onmessage = (e) => {
@@ -196,14 +215,14 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
           if (elapsedRef.current) clearInterval(elapsedRef.current)
           const newResult: LiveResult = {
             model: msg.model,
-            testNum: msg.testNum as 1 | 2 | 3,
+            testNum: msg.testNum,
             duration: msg.duration,
             response: msg.response,
           }
           completedRef.current = [...completedRef.current, newResult]
           setCompleted(completedRef.current)
           onSessionUpdate(sessionId, buildModelResults(completedRef.current, models), 'running')
-          if (msg.testNum === 3) {
+          if (msg.testNum === msg.totalTests) {
             setStatuses((s) => ({ ...s, [msg.model]: 'complete' }))
           }
           break
@@ -265,17 +284,22 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
 
   const chartData = useMemo(
     () =>
-      models.map((model) => ({
-        name: shortName(model),
-        fullName: model,
-        test1: completed.find((r) => r.model === model && r.testNum === 1)?.duration,
-        test2: completed.find((r) => r.model === model && r.testNum === 2)?.duration,
-        test3: completed.find((r) => r.model === model && r.testNum === 3)?.duration,
-      })),
-    [models, completed],
+      models.map((model) => {
+        const entry: Record<string, string | number | undefined> = {
+          name: shortName(model),
+          fullName: model,
+        }
+        testDefs.forEach((td) => {
+          entry[`test${td.testNum}`] = completed.find(
+            (r) => r.model === model && r.testNum === td.testNum,
+          )?.duration
+        })
+        return entry
+      }),
+    [models, completed, testDefs],
   )
 
-  const totalTests = models.length * 3
+  const totalTests = models.length * numTests
   const doneTests = completed.length
   const overallPct = Math.round((doneTests / totalTests) * 100)
 
@@ -316,7 +340,6 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
           </div>
         </div>
 
-        {/* Pause / Stop controls */}
         {!done && !error && (
           <div className="flex gap-2 shrink-0">
             <button
@@ -347,7 +370,6 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
         )}
       </div>
 
-      {/* Paused banner */}
       {isPaused && !done && (
         <div className="glass rounded-xl px-4 py-3 mb-4 border border-amber-500/30 flex items-center justify-between fade-up">
           <div className="flex items-center gap-2 text-amber-400 text-sm">
@@ -370,26 +392,13 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
         </div>
       )}
 
-      {/* System Stats */}
       {stats && (
         <div className="glass rounded-2xl p-4 mb-6 fade-up">
           <p className="text-xs text-slate-500 uppercase tracking-wider mb-3">System Resources</p>
           <div className="flex gap-6 flex-wrap">
             <StatBar label="CPU" value={stats.cpu} max={100} unit="%" color="#818cf8" />
-            <StatBar
-              label="RAM"
-              value={Math.round(stats.memPercent)}
-              max={100}
-              unit="%"
-              color="#60a5fa"
-            />
-            <StatBar
-              label="Ollama CPU"
-              value={stats.ollamaCpu}
-              max={100}
-              unit="%"
-              color="#fb923c"
-            />
+            <StatBar label="RAM" value={Math.round(stats.memPercent)} max={100} unit="%" color="#60a5fa" />
+            <StatBar label="Ollama CPU" value={stats.ollamaCpu} max={100} unit="%" color="#fb923c" />
             <div className="flex-1 min-w-[120px]">
               <div className="flex justify-between items-baseline mb-1">
                 <span className="text-xs text-slate-500">Ollama RAM</span>
@@ -455,16 +464,16 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
                     )}
                   </div>
                   <div className="flex gap-1">
-                    {([1, 2, 3] as const).map((n) => {
-                      const done = modelCompleted.some((r) => r.testNum === n)
-                      const isRunning = isActive && activeTest === n
+                    {testDefs.map((td) => {
+                      const isDoneTest = modelCompleted.some((r) => r.testNum === td.testNum)
+                      const isRunning = isActive && activeTest === td.testNum
                       return (
                         <div
-                          key={n}
+                          key={td.testNum}
                           className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${
                             isRunning
                               ? 'bg-violet-400 scale-125'
-                              : done
+                              : isDoneTest
                               ? 'bg-emerald-400'
                               : 'bg-slate-700'
                           }`}
@@ -478,7 +487,7 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
           </div>
         </div>
 
-        {/* Right panel: selected model responses OR live test */}
+        {/* Right panel */}
         <div className="lg:col-span-2 glass rounded-2xl p-4 fade-up flex flex-col">
           {selectedModel ? (
             <>
@@ -495,13 +504,13 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
                 </button>
               </div>
               <div className="flex flex-col gap-2 overflow-y-auto flex-1">
-                {([1, 2, 3] as const).map((n) => {
-                  const result = completed.find((r) => r.model === selectedModel && r.testNum === n)
+                {testDefs.map((td) => {
+                  const result = completed.find((r) => r.model === selectedModel && r.testNum === td.testNum)
                   return (
-                    <div key={n} className={`rounded-xl p-3 ${result ? 'bg-slate-800/60' : 'bg-slate-800/20'}`}>
+                    <div key={td.testNum} className={`rounded-xl p-3 ${result ? 'bg-slate-800/60' : 'bg-slate-800/20'}`}>
                       <div className="flex items-center justify-between mb-1.5">
-                        <span className="text-xs font-semibold" style={{ color: TEST_COLORS[n - 1] }}>
-                          {TEST_LABELS[n - 1]}
+                        <span className="text-xs font-semibold" style={{ color: td.color }}>
+                          {td.label}
                         </span>
                         {result && (
                           <span className="text-xs font-mono text-slate-400">{result.duration.toFixed(2)}s</span>
@@ -524,7 +533,7 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
                     {activeModel}
                     <span className="text-slate-500 font-normal">
                       {' '}
-                      — {TEST_LABELS[activeTest - 1]}
+                      — {testDefs.find(td => td.testNum === activeTest)?.label ?? `Test ${activeTest}`}
                     </span>
                   </p>
                 </div>
@@ -546,13 +555,13 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
                 </div>
               </div>
               <div className="flex gap-2 mt-3">
-                {([1, 2, 3] as const).map((n) => (
+                {testDefs.map((td) => (
                   <div
-                    key={n}
+                    key={td.testNum}
                     className={`flex-1 h-1 rounded-full transition-all duration-500 ${
-                      n < activeTest
+                      td.testNum < activeTest
                         ? 'bg-emerald-500'
-                        : n === activeTest
+                        : td.testNum === activeTest
                         ? 'progress-bar'
                         : 'bg-slate-800'
                     }`}
@@ -613,19 +622,19 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
                   <span style={{ color: '#94a3b8', fontSize: 12 }}>{val}</span>
                 )}
               />
-              {TEST_LABELS.map((label, i) => (
+              {testDefs.map((td) => (
                 <Bar
-                  key={label}
-                  dataKey={`test${i + 1}`}
-                  name={label}
-                  fill={TEST_COLORS[i]}
+                  key={td.testNum}
+                  dataKey={`test${td.testNum}`}
+                  name={td.label}
+                  fill={td.color}
                   radius={[4, 4, 0, 0]}
                   isAnimationActive={false}
                 >
                   {chartData.map((entry, idx) => (
                     <Cell
                       key={idx}
-                      fill={TEST_COLORS[i]}
+                      fill={td.color}
                       fillOpacity={entry.fullName === activeModel ? 1 : 0.7}
                     />
                   ))}

@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react'
 import SetupPage from './pages/SetupPage'
 import TestingPage from './pages/TestingPage'
 import ResultsPage from './pages/ResultsPage'
-import type { AppPage, ImageData, ModelResult, Evaluation, Session } from './types'
+import type { AppPage, ImageData, ModelResult, Evaluation, Session, LlmParams } from './types'
+import { DEFAULT_LLM_PARAMS } from './types'
 import { v4 as uuidv4 } from './uuid'
 
 const DEFAULT_PROMPT =
@@ -23,7 +24,6 @@ function loadSaved(): Record<string, unknown> {
 function loadSessions(): Session[] {
   try {
     const raw = JSON.parse(localStorage.getItem(SESSIONS_KEY) || '[]') as Session[]
-    // Fix sessions left as 'running' from a previous browser close
     return raw.map(s => s.status === 'running' ? { ...s, status: 'partial' as const } : s)
   } catch {
     return []
@@ -38,6 +38,12 @@ function saveSessions(sessions: Session[]) {
       localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions.slice(0, 5)))
     } catch { /* ignore */ }
   }
+}
+
+export function numTestsForSession(session: Session): number {
+  const names = [session.image1Name, session.image2Name, session.image3Name, session.image4Name].filter(Boolean)
+  const imageCount = names.length
+  return imageCount > 1 ? imageCount + 1 : 3
 }
 
 export default function App() {
@@ -57,6 +63,15 @@ export default function App() {
   const [image2, setImage2] = useState<ImageData | null>(
     (saved.image2 as ImageData) || null,
   )
+  const [image3, setImage3] = useState<ImageData | null>(
+    (saved.image3 as ImageData) || null,
+  )
+  const [image4, setImage4] = useState<ImageData | null>(
+    (saved.image4 as ImageData) || null,
+  )
+  const [llmParams, setLlmParams] = useState<LlmParams>(
+    (saved.llmParams as LlmParams) || DEFAULT_LLM_PARAMS,
+  )
   const [testResults, setTestResults] = useState<ModelResult[]>([])
   const [evaluations, setEvaluations] = useState<Evaluation[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
@@ -64,17 +79,16 @@ export default function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ selectedModels, prompt, image1, image2 }))
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ selectedModels, prompt, image1, image2, image3, image4, llmParams }))
     } catch {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify({ selectedModels, prompt }))
       } catch { /* ignore */ }
     }
-  }, [selectedModels, prompt, image1, image2])
+  }, [selectedModels, prompt, image1, image2, image3, image4, llmParams])
 
   function createSession(): string {
     const id = uuidv4()
-    // Include already-done models (from a resumed session) + new models
     const allModels = [
       ...previousResults.map(r => r.model),
       ...selectedModels,
@@ -87,6 +101,8 @@ export default function App() {
       prompt,
       image1Name: image1?.name || '',
       image2Name: image2?.name || '',
+      image3Name: image3?.name || '',
+      image4Name: image4?.name || '',
       results: [...previousResults],
     }
     setSessions(prev => {
@@ -147,11 +163,12 @@ export default function App() {
   }
 
   function handleResumeSession(session: Session) {
+    const numTests = numTestsForSession(session)
     const doneModels = new Set(
-      session.results.filter(r => r.tests.length === 3).map(r => r.model)
+      session.results.filter(r => r.tests.length === numTests).map(r => r.model)
     )
     const remaining = session.models.filter(m => !doneModels.has(m))
-    const done = session.results.filter(r => r.tests.length === 3)
+    const done = session.results.filter(r => r.tests.length === numTests)
 
     setPrompt(session.prompt)
     setSelectedModels(remaining.length > 0 ? remaining : session.models)
@@ -169,12 +186,18 @@ export default function App() {
         setImage1={setImage1}
         image2={image2}
         setImage2={setImage2}
+        image3={image3}
+        setImage3={setImage3}
+        image4={image4}
+        setImage4={setImage4}
         onStart={handleStartTest}
         sessions={sessions}
         onViewSession={handleViewSession}
         onResumeSession={handleResumeSession}
         previousResults={previousResults}
         onClearPrevious={() => setPreviousResults([])}
+        llmParams={llmParams}
+        setLlmParams={setLlmParams}
       />
     )
   }
@@ -186,10 +209,13 @@ export default function App() {
         prompt={prompt}
         image1={image1!}
         image2={image2!}
+        image3={image3}
+        image4={image4}
         onComplete={handleTestComplete}
         onBack={handleTestingBack}
         sessionId={activeSessionId!}
         onSessionUpdate={updateSession}
+        llmParams={llmParams}
       />
     )
   }

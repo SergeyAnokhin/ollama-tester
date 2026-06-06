@@ -1,5 +1,5 @@
 export interface TestResult {
-  testNum: 1 | 2 | 3;
+  testNum: number;
   description: string;
   duration: number;
   response: string;
@@ -8,6 +8,23 @@ export interface TestResult {
 export interface ModelResult {
   model: string;
   tests: TestResult[];
+}
+
+export interface ModelDetails {
+  family: string
+  families: string[]
+  format: string
+  parameter_size: string
+  quantization_level: string
+}
+
+export interface ModelInfo {
+  name: string;
+  size: number;
+  details?: ModelDetails;
+  has_vision: boolean;
+  has_thinking: boolean;
+  context_length?: number;
 }
 
 export interface SystemStats {
@@ -20,7 +37,7 @@ export interface SystemStats {
 }
 
 export interface EvaluationScore {
-  testNum: 1 | 2 | 3;
+  testNum: number;
   score: number;
   comment: string;
 }
@@ -43,6 +60,22 @@ export interface ImageData {
   name: string;
 }
 
+export interface LlmParams {
+  num_thread: number | null
+  num_ctx: number | null
+  num_predict: number | null
+  keep_alive: string
+  temperature: number | null
+}
+
+export const DEFAULT_LLM_PARAMS: LlmParams = {
+  num_thread: null,
+  num_ctx: null,
+  num_predict: null,
+  keep_alive: '',
+  temperature: null,
+}
+
 export type AppPage = 'setup' | 'testing' | 'results';
 
 export type ModelStatus = 'pending' | 'active' | 'complete' | 'error';
@@ -55,5 +88,7 @@ export interface Session {
   prompt: string
   image1Name: string
   image2Name: string
+  image3Name?: string
+  image4Name?: string
   results: ModelResult[]
 }

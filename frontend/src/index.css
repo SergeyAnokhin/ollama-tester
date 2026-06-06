@@ -48,6 +48,15 @@
   50%       { opacity: 0; }
 }
 
+@keyframes service-blink {
+  0%, 100% { opacity: 0.3; }
+  50%       { opacity: 0.9; }
+}
+
+.service-dot-blink {
+  animation: service-blink 1.2s ease-in-out infinite;
+}
+
 .fade-up {
   animation: fade-up 0.35s ease-out both;
 }

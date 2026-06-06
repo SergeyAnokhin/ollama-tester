@@ -1,6 +1,6 @@
-import { useState, useCallback } from 'react'
-import { Cpu, ImagePlus, Play, RefreshCw, CheckSquare, Square, X, AlertCircle, Zap, Copy, Check, History } from 'lucide-react'
-import type { ImageData, Session, ModelResult } from '../types'
+import { useState, useCallback, useEffect } from 'react'
+import { Cpu, ImagePlus, Play, RefreshCw, CheckSquare, Square, X, AlertCircle, Zap, Copy, Check, History, Eye, Brain, ChevronDown, ChevronRight, Settings2 } from 'lucide-react'
+import type { ImageData, Session, ModelResult, ModelInfo, LlmParams } from '../types'
 
 interface Props {
   selectedModels: string[]
@@ -11,22 +11,37 @@ interface Props {
   setImage1: (img: ImageData | null) => void
   image2: ImageData | null
   setImage2: (img: ImageData | null) => void
+  image3: ImageData | null
+  setImage3: (img: ImageData | null) => void
+  image4: ImageData | null
+  setImage4: (img: ImageData | null) => void
   onStart: () => void
   sessions: Session[]
   onViewSession: (session: Session) => void
   onResumeSession: (session: Session) => void
   previousResults: ModelResult[]
   onClearPrevious: () => void
+  llmParams: LlmParams
+  setLlmParams: (p: LlmParams) => void
+}
+
+function formatSize(bytes: number): string {
+  if (!bytes) return ''
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)}GB`
+  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(0)}MB`
+  return `${(bytes / 1e3).toFixed(0)}KB`
 }
 
 function ImageDropzone({
   label,
   value,
   onChange,
+  optional,
 }: {
   label: string
   value: ImageData | null
   onChange: (img: ImageData) => void
+  optional?: boolean
 }) {
   const [dragging, setDragging] = useState(false)
 
@@ -43,9 +58,9 @@ function ImageDropzone({
 
   return (
     <div
-      className={`relative rounded-2xl overflow-hidden transition-all duration-200 cursor-pointer
+      className={`relative rounded-xl overflow-hidden transition-all duration-200 cursor-pointer aspect-video
         ${dragging ? 'ring-2 ring-violet-500 scale-[1.02]' : ''}
-        ${value ? 'aspect-video' : 'aspect-video'}
+        ${!value && optional ? 'opacity-50 hover:opacity-80' : ''}
         glass glass-hover`}
       onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
       onDragLeave={() => setDragging(false)}
@@ -68,33 +83,29 @@ function ImageDropzone({
     >
       {value ? (
         <>
-          <img
-            src={value.dataUrl}
-            alt={value.name}
-            className="w-full h-full object-cover"
-          />
+          <img src={value.dataUrl} alt={value.name} className="w-full h-full object-cover" />
           <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
-          <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between">
-            <span className="text-xs text-slate-300 truncate max-w-[160px]">{value.name}</span>
-            <div className="flex items-center gap-1 bg-emerald-500/20 border border-emerald-500/40 rounded-full px-2 py-0.5">
-              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              <span className="text-xs text-emerald-400">Ready</span>
+          <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between">
+            <span className="text-[10px] text-slate-300 truncate max-w-[100px]">{value.name}</span>
+            <div className="flex items-center gap-1 bg-emerald-500/20 border border-emerald-500/40 rounded-full px-1.5 py-0.5">
+              <div className="w-1 h-1 rounded-full bg-emerald-400" />
+              <span className="text-[10px] text-emerald-400">Ready</span>
             </div>
           </div>
-          <div className="absolute top-2 left-3">
-            <span className="text-xs font-semibold text-white/80 bg-black/50 rounded-full px-2 py-0.5">
+          <div className="absolute top-1.5 left-2">
+            <span className="text-[10px] font-semibold text-white/80 bg-black/50 rounded-full px-1.5 py-0.5">
               {label}
             </span>
           </div>
         </>
       ) : (
-        <div className="flex flex-col items-center justify-center h-full gap-3 p-6">
-          <div className="w-12 h-12 rounded-2xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center">
-            <ImagePlus className="w-6 h-6 text-violet-400" />
+        <div className="flex flex-col items-center justify-center h-full gap-2 p-3">
+          <div className="w-8 h-8 rounded-xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center">
+            <ImagePlus className="w-4 h-4 text-violet-400" />
           </div>
           <div className="text-center">
-            <p className="text-sm font-semibold text-slate-300">{label}</p>
-            <p className="text-xs text-slate-500 mt-1">Drag & drop or click to upload</p>
+            <p className="text-xs font-semibold text-slate-300">{label}</p>
+            {optional && <p className="text-[10px] text-slate-600 mt-0.5">Optional</p>}
           </div>
         </div>
       )}
@@ -110,6 +121,219 @@ function formatTimeAgo(ts: number): string {
   const h = Math.floor(m / 60)
   if (h < 24) return `${h}h ago`
   return `${Math.floor(h / 24)}d ago`
+}
+
+function parseParamSize(s?: string): number {
+  if (!s) return 0
+  const m = s.match(/([\d.]+)\s*([BMK]?)/i)
+  if (!m) return 0
+  const n = parseFloat(m[1])
+  switch (m[2].toUpperCase()) {
+    case 'B': return n * 1e9
+    case 'M': return n * 1e6
+    case 'K': return n * 1e3
+    default: return n
+  }
+}
+
+function TooltipRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex justify-between gap-2">
+      <span className="text-slate-500 shrink-0">{label}</span>
+      <span className="text-slate-300 text-right">{value}</span>
+    </div>
+  )
+}
+
+function ModelCard({
+  m,
+  selected,
+  index,
+  onToggle,
+  maxSize,
+  maxParams,
+}: {
+  m: ModelInfo
+  selected: boolean
+  index: number
+  onToggle: () => void
+  maxSize: number
+  maxParams: number
+}) {
+  const [hovered, setHovered] = useState(false)
+
+  const [baseName, tag] = m.name.split(':')
+  const sizeStr = formatSize(m.size)
+  const paramSize = m.details?.parameter_size
+  const quantLevel = m.details?.quantization_level
+  const family = m.details?.family
+
+  const sizeRatio = maxSize > 0 ? m.size / maxSize : 0
+  const paramRatio = maxParams > 0 ? parseParamSize(paramSize) / maxParams : 0
+
+  // First row of cards → tooltip below; rest → tooltip above
+  const tooltipPosClass = index < 4 ? 'top-full mt-2' : 'bottom-full mb-2'
+
+  return (
+    <div
+      className="relative"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <button
+        onClick={onToggle}
+        className={`w-full glass glass-hover rounded-xl p-3 text-left transition-all duration-200 fade-up ${
+          selected ? 'ring-1 ring-violet-500 bg-violet-500/10' : 'opacity-60'
+        }`}
+        style={{ animationDelay: `${index * 0.04}s` }}
+      >
+        <div className="flex items-start justify-between mb-1.5">
+          <span className="text-sm font-semibold text-white truncate leading-tight flex-1 mr-2">{baseName}</span>
+          <div className="flex items-center gap-1 shrink-0">
+            {m.has_vision && <Eye className="w-3.5 h-3.5 text-blue-400" />}
+            {m.has_thinking && <Brain className="w-3.5 h-3.5 text-purple-400" />}
+            {selected ? (
+              <CheckSquare className="w-3.5 h-3.5 text-violet-400 ml-0.5" />
+            ) : (
+              <Square className="w-3.5 h-3.5 text-slate-600 ml-0.5" />
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5 flex-wrap mb-2">
+          {tag && <span className="text-[10px] text-slate-500">{tag}</span>}
+          {sizeStr && <span className="text-[10px] text-slate-600">{sizeStr}</span>}
+          {paramSize && (
+            <span className="text-[10px] text-slate-400 bg-slate-800/80 rounded px-1 py-0.5">
+              {paramSize}
+            </span>
+          )}
+        </div>
+        {/* Normalized bars */}
+        <div className="space-y-1">
+          <div className="h-[3px] bg-slate-700/40 rounded-full overflow-hidden">
+            <div className="h-full bg-sky-400/70 rounded-full transition-all duration-500" style={{ width: `${sizeRatio * 100}%` }} />
+          </div>
+          <div className="h-[3px] bg-slate-700/40 rounded-full overflow-hidden">
+            <div className="h-full bg-violet-400/70 rounded-full transition-all duration-500" style={{ width: `${paramRatio * 100}%` }} />
+          </div>
+        </div>
+      </button>
+
+      {hovered && (
+        <div
+          className={`absolute ${tooltipPosClass} left-0 z-50 w-52 rounded-xl p-3 shadow-2xl text-xs pointer-events-none border border-slate-700/70`}
+          style={{ background: 'rgba(10, 13, 28, 0.96)', backdropFilter: 'blur(16px)' }}
+        >
+          <p className="font-semibold text-white mb-2 truncate">{m.name}</p>
+          <div className="space-y-1.5">
+            {family && <TooltipRow label="Family" value={<span className="capitalize">{family}</span>} />}
+            {paramSize && <TooltipRow label="Parameters" value={paramSize} />}
+            {quantLevel && <TooltipRow label="Quantization" value={quantLevel} />}
+            {sizeStr && <TooltipRow label="Disk size" value={sizeStr} />}
+            {m.context_length && (
+              <TooltipRow label="Context" value={`${Math.round(m.context_length / 1024)}K tokens`} />
+            )}
+            <TooltipRow
+              label="Vision"
+              value={m.has_vision ? <span className="text-blue-400">Yes</span> : <span className="text-slate-500">No</span>}
+            />
+            <TooltipRow
+              label="Thinking"
+              value={m.has_thinking ? <span className="text-purple-400">Yes</span> : <span className="text-slate-500">No</span>}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const PARAM_DEFS: {
+  key: keyof LlmParams
+  label: string
+  hint: string
+  type: 'int' | 'float' | 'string'
+  placeholder: string
+}[] = [
+  { key: 'num_thread', label: 'CPU Threads', hint: 'P-core count for hybrid CPUs (auto if empty)', type: 'int', placeholder: 'auto' },
+  { key: 'num_ctx', label: 'Context Size', hint: 'Token window size — larger = more VRAM', type: 'int', placeholder: 'model default' },
+  { key: 'num_predict', label: 'Max Tokens', hint: '-1 = unlimited, -2 = fill context', type: 'int', placeholder: '-1' },
+  { key: 'keep_alive', label: 'Keep Alive', hint: 'GPU retention after request: "5m", "1h", 0, -1', type: 'string', placeholder: '5m' },
+  { key: 'temperature', label: 'Temperature', hint: '0 = precise/deterministic, 1 = creative/random', type: 'float', placeholder: 'model default' },
+]
+
+function LlmParamsSection({ params, setParams }: { params: LlmParams; setParams: (p: LlmParams) => void }) {
+  const [open, setOpen] = useState(false)
+
+  const activeCount = PARAM_DEFS.filter(({ key }) => {
+    const v = params[key]
+    return v !== null && v !== ''
+  }).length
+
+  function handleChange(key: keyof LlmParams, raw: string) {
+    const def = PARAM_DEFS.find(d => d.key === key)!
+    if (raw === '') {
+      setParams({ ...params, [key]: key === 'keep_alive' ? '' : null })
+      return
+    }
+    if (def.type === 'int') {
+      const n = parseInt(raw, 10)
+      setParams({ ...params, [key]: isNaN(n) ? null : n })
+    } else if (def.type === 'float') {
+      const n = parseFloat(raw)
+      setParams({ ...params, [key]: isNaN(n) ? null : n })
+    } else {
+      setParams({ ...params, [key]: raw })
+    }
+  }
+
+  function displayValue(key: keyof LlmParams): string {
+    const v = params[key]
+    if (v === null || v === '') return ''
+    return String(v)
+  }
+
+  return (
+    <section className="mb-8 fade-up" style={{ animationDelay: '0.12s' }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-2 text-sm font-semibold uppercase tracking-widest text-slate-400 hover:text-slate-300 transition-colors mb-4 w-full text-left"
+      >
+        {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+        <Settings2 className="w-4 h-4" />
+        LLM Parameters
+        {activeCount > 0 && (
+          <span className="normal-case tracking-normal font-normal text-xs text-violet-400 bg-violet-500/10 rounded-full px-2 py-0.5 ml-1">
+            {activeCount} set
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div className="glass rounded-2xl p-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+            {PARAM_DEFS.map(({ key, label, hint, type, placeholder }) => (
+              <div key={key}>
+                <label className="block text-xs font-semibold text-slate-400 mb-1">{label}</label>
+                <input
+                  type={type === 'string' ? 'text' : 'number'}
+                  step={type === 'float' ? '0.05' : '1'}
+                  min={type === 'float' ? '0' : undefined}
+                  max={type === 'float' ? '2' : undefined}
+                  value={displayValue(key)}
+                  onChange={e => handleChange(key, e.target.value)}
+                  placeholder={placeholder}
+                  className="w-full bg-slate-800/60 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-200
+                    placeholder:text-slate-600 outline-none focus:border-violet-500/60 focus:ring-1 focus:ring-violet-500/30 transition-all"
+                />
+                <p className="text-[10px] text-slate-600 mt-1 leading-snug">{hint}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  )
 }
 
 const STATUS_STYLE: Record<Session['status'], string> = {
@@ -191,6 +415,22 @@ function SessionCard({
   )
 }
 
+// Service status dot: pulses green when up, grey+blink when down
+function ServiceDot({ ok, checking }: { ok: boolean | null; checking: boolean }) {
+  if (checking || ok === null) {
+    return <span className="w-1.5 h-1.5 rounded-full bg-slate-600 inline-block" />
+  }
+  if (ok) {
+    return (
+      <span className="relative inline-flex w-1.5 h-1.5">
+        <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping" />
+        <span className="relative inline-flex rounded-full w-1.5 h-1.5 bg-emerald-400" />
+      </span>
+    )
+  }
+  return <span className="w-1.5 h-1.5 rounded-full bg-slate-500 inline-block service-dot-blink" />
+}
+
 export default function SetupPage({
   selectedModels,
   setSelectedModels,
@@ -200,42 +440,69 @@ export default function SetupPage({
   setImage1,
   image2,
   setImage2,
+  image3,
+  setImage3,
+  image4,
+  setImage4,
   onStart,
   sessions,
   onViewSession,
   onResumeSession,
   previousResults,
   onClearPrevious,
+  llmParams,
+  setLlmParams,
 }: Props) {
-  const [availableModels, setAvailableModels] = useState<string[]>([])
+  const [availableModels, setAvailableModels] = useState<ModelInfo[]>([])
   const [scanning, setScanning] = useState(false)
   const [scanError, setScanError] = useState<string | null>(null)
   const [scanned, setScanned] = useState(false)
   const [copiedModels, setCopiedModels] = useState(false)
+
+  // Service health state
+  const [ollamaOk, setOllamaOk] = useState<boolean | null>(null)
+  const [backendOk, setBackendOk] = useState<boolean | null>(null)
+  const [healthChecking, setHealthChecking] = useState(true)
+
+  useEffect(() => {
+    async function checkHealth() {
+      const [backend, ollama] = await Promise.all([
+        fetch('/api/health').then(r => r.ok).catch(() => false),
+        fetch('http://localhost:11434/api/tags').then(r => r.ok).catch(() => false),
+      ])
+      setBackendOk(backend)
+      setOllamaOk(ollama)
+      setHealthChecking(false)
+    }
+
+    checkHealth()
+    const interval = setInterval(checkHealth, 10000)
+    return () => clearInterval(interval)
+  }, [])
 
   async function scanModels() {
     setScanning(true)
     setScanError(null)
     try {
       const r = await fetch('/api/models').catch(() => {
-        throw new Error('Python backend не запущен. Запустите: cd backend && uvicorn main:app --port 8000')
+        throw new Error('Python backend не запущен. Запустите: cd backend && uvicorn main:app --port 8001')
       })
       if (!r.ok) {
-        throw new Error(`Python backend вернул HTTP ${r.status}. Запустите: cd backend && uvicorn main:app --port 8000`)
+        throw new Error(`Python backend вернул HTTP ${r.status}. Запустите: cd backend && uvicorn main:app --port 8001`)
       }
       const text = await r.text()
-      let data: { models?: string[]; error?: string }
+      let data: { models?: ModelInfo[]; error?: string }
       try {
         data = JSON.parse(text)
       } catch {
-        throw new Error('Backend вернул неверный ответ. Убедитесь что uvicorn запущен на порту 8000')
+        throw new Error('Backend вернул неверный ответ. Убедитесь что uvicorn запущен на порту 8001')
       }
       if (data.error) throw new Error(`Ollama: ${data.error}`)
       if (!Array.isArray(data.models)) {
         throw new Error('Запустите Python backend: cd backend && uvicorn main:app --port 8001')
       }
       setAvailableModels(data.models)
-      setSelectedModels(data.models)
+      setSelectedModels(data.models.map(m => m.name))
       setScanned(true)
     } catch (e: unknown) {
       setScanError(e instanceof Error ? e.message : 'Неизвестная ошибка')
@@ -244,15 +511,23 @@ export default function SetupPage({
     }
   }
 
-  function toggleModel(m: string) {
+  function toggleModel(name: string) {
     setSelectedModels(
-      selectedModels.includes(m)
-        ? selectedModels.filter((x) => x !== m)
-        : [...selectedModels, m],
+      selectedModels.includes(name)
+        ? selectedModels.filter((x) => x !== name)
+        : [...selectedModels, name],
     )
   }
 
+  const loadedImages = [image1, image2, image3, image4].filter(Boolean)
+  const numTests = loadedImages.length > 1 ? loadedImages.length + 1 : 3
   const canStart = selectedModels.length > 0 && prompt.trim().length > 0 && !!image1 && !!image2
+
+  // Build test description
+  const testDesc = loadedImages.length > 0
+    ? loadedImages.map((_, i) => `Test ${i + 1} → Image ${i + 1}`).join(' · ') +
+      ` · Test ${loadedImages.length + 1} → all`
+    : 'Upload at least 2 images to start'
 
   return (
     <div className="min-h-screen p-6">
@@ -272,19 +547,17 @@ export default function SetupPage({
             </p>
           </div>
 
-          {/* Prerequisites banner */}
-          <div className="glass rounded-xl px-4 py-3 mb-4 flex gap-6 flex-wrap fade-up" style={{ animationDelay: '0.02s' }}>
+          {/* Prerequisites banner with live health dots */}
+          <div className="glass rounded-xl px-4 py-3 mb-4 flex gap-6 flex-wrap fade-up items-center" style={{ animationDelay: '0.02s' }}>
+            <span className="text-slate-500 text-xs">Services:</span>
             <div className="flex items-center gap-2 text-xs">
-              <span className="text-slate-500">Нужно запустить:</span>
-            </div>
-            <div className="flex items-center gap-2 text-xs">
-              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              <span className="text-slate-400">Ollama</span>
+              <ServiceDot ok={ollamaOk} checking={healthChecking} />
+              <span className={ollamaOk ? 'text-slate-300' : 'text-slate-500'}>Ollama</span>
               <code className="text-slate-500 bg-slate-800 rounded px-1.5 py-0.5">localhost:11434</code>
             </div>
             <div className="flex items-center gap-2 text-xs">
-              <div className="w-1.5 h-1.5 rounded-full bg-violet-400" />
-              <span className="text-slate-400">Python backend</span>
+              <ServiceDot ok={backendOk} checking={healthChecking} />
+              <span className={backendOk ? 'text-slate-300' : 'text-slate-500'}>Python backend</span>
               <code className="text-slate-500 bg-slate-800 rounded px-1.5 py-0.5">cd backend &amp;&amp; uvicorn main:app --port 8001</code>
             </div>
           </div>
@@ -318,7 +591,7 @@ export default function SetupPage({
               {scanned && availableModels.length > 0 && (
                 <div className="flex items-center gap-3 text-xs">
                   <button
-                    onClick={() => setSelectedModels(availableModels)}
+                    onClick={() => setSelectedModels(availableModels.map(m => m.name))}
                     className="text-violet-400 hover:text-violet-300 transition-colors"
                   >
                     Select all
@@ -385,36 +658,25 @@ export default function SetupPage({
 
             {scanned && availableModels.length > 0 && (
               <>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-3">
-                  {availableModels.map((m, i) => {
-                    const selected = selectedModels.includes(m)
-                    const [name, tag] = m.split(':')
-                    return (
-                      <button
-                        key={m}
-                        onClick={() => toggleModel(m)}
-                        className={`glass glass-hover rounded-xl p-3 text-left transition-all duration-200 fade-up ${
-                          selected
-                            ? 'ring-1 ring-violet-500 bg-violet-500/10'
-                            : 'opacity-60'
-                        }`}
-                        style={{ animationDelay: `${i * 0.04}s` }}
-                      >
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-sm font-semibold text-white truncate">{name}</span>
-                          {selected ? (
-                            <CheckSquare className="w-4 h-4 text-violet-400 shrink-0" />
-                          ) : (
-                            <Square className="w-4 h-4 text-slate-600 shrink-0" />
-                          )}
-                        </div>
-                        {tag && (
-                          <span className="text-xs text-slate-500">{tag}</span>
-                        )}
-                      </button>
-                    )
-                  })}
-                </div>
+                {(() => {
+                  const maxSize = Math.max(...availableModels.map(m => m.size || 0), 1)
+                  const maxParams = Math.max(...availableModels.map(m => parseParamSize(m.details?.parameter_size)), 1)
+                  return (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-3">
+                      {availableModels.map((m, i) => (
+                        <ModelCard
+                          key={m.name}
+                          m={m}
+                          selected={selectedModels.includes(m.name)}
+                          index={i}
+                          onToggle={() => toggleModel(m.name)}
+                          maxSize={maxSize}
+                          maxParams={maxParams}
+                        />
+                      ))}
+                    </div>
+                  )
+                })()}
                 <p className="text-xs text-slate-600">
                   ⚠ Only vision-capable models (llava, bakllava, moondream, minicpm-v…) can process images
                 </p>
@@ -438,49 +700,50 @@ export default function SetupPage({
               />
             </div>
             <p className="text-xs text-slate-600 mt-2">
-              The same prompt is used for all 3 tests. Image placeholders are managed automatically.
+              The same prompt is used for all tests. Image placeholders are managed automatically.
             </p>
           </section>
 
-          {/* Images */}
+          {/* LLM Parameters */}
+          <LlmParamsSection params={llmParams} setParams={setLlmParams} />
+
+          {/* Images — 2×2 grid */}
           <section className="mb-10 fade-up" style={{ animationDelay: '0.15s' }}>
             <h2 className="text-sm font-semibold uppercase tracking-widest text-slate-400 mb-4">
               Test Images
+              <span className="ml-2 text-slate-600 normal-case tracking-normal font-normal">
+                (up to 4)
+              </span>
             </h2>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <ImageDropzone
-                  label="Image 1"
-                  value={image1}
-                  onChange={setImage1}
-                />
-                {image1 && (
-                  <button
-                    onClick={() => setImage1(null)}
-                    className="mt-2 text-xs text-slate-600 hover:text-red-400 transition-colors flex items-center gap-1"
-                  >
-                    <X className="w-3 h-3" /> Remove
-                  </button>
-                )}
-              </div>
-              <div>
-                <ImageDropzone
-                  label="Image 2"
-                  value={image2}
-                  onChange={setImage2}
-                />
-                {image2 && (
-                  <button
-                    onClick={() => setImage2(null)}
-                    className="mt-2 text-xs text-slate-600 hover:text-red-400 transition-colors flex items-center gap-1"
-                  >
-                    <X className="w-3 h-3" /> Remove
-                  </button>
-                )}
-              </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
+              {(
+                [
+                  { label: 'Image 1', value: image1, set: setImage1, optional: false },
+                  { label: 'Image 2', value: image2, set: setImage2, optional: false },
+                  { label: 'Image 3', value: image3, set: setImage3, optional: true },
+                  { label: 'Image 4', value: image4, set: setImage4, optional: true },
+                ] as const
+              ).map(({ label, value, set, optional }) => (
+                <div key={label}>
+                  <ImageDropzone
+                    label={label}
+                    value={value}
+                    onChange={set}
+                    optional={optional}
+                  />
+                  {value && (
+                    <button
+                      onClick={() => set(null)}
+                      className="mt-1.5 text-[10px] text-slate-600 hover:text-red-400 transition-colors flex items-center gap-1"
+                    >
+                      <X className="w-3 h-3" /> Remove
+                    </button>
+                  )}
+                </div>
+              ))}
             </div>
-            <p className="text-xs text-slate-600 mt-3">
-              Test 1 uses Image 1 · Test 2 uses Image 2 · Test 3 uses both
+            <p className="text-xs text-slate-600">
+              {testDesc}
             </p>
           </section>
 
@@ -490,7 +753,7 @@ export default function SetupPage({
               {canStart ? (
                 <span className="text-emerald-400">
                   ✓ {selectedModels.length} model{selectedModels.length !== 1 ? 's' : ''} ·{' '}
-                  {selectedModels.length * 3} total tests
+                  {selectedModels.length * numTests} total tests
                   {previousResults.length > 0 && (
                     <span className="text-violet-400 ml-2">
                       + {previousResults.length} resumed
@@ -498,7 +761,7 @@ export default function SetupPage({
                   )}
                 </span>
               ) : (
-                <span>Select models, write a prompt, and upload 2 images to start</span>
+                <span>Select models, write a prompt, and upload at least 2 images to start</span>
               )}
             </div>
             <button

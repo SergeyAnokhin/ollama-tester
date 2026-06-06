@@ -70,9 +70,24 @@ interface GeminiModel {
 
 const GEMINI_KEY_STORAGE = 'ollama-tester-gemini-key'
 
-const TEST_COLORS = ['#818cf8', '#34d399', '#fb923c']
-const TEST_LABELS = ['Image 1', 'Image 2', 'Image 1+2']
+const ALL_TEST_COLORS = ['#818cf8', '#34d399', '#fb923c', '#f472b6', '#facc15']
 const EVAL_COLORS = ['#f472b6', '#38bdf8', '#a78bfa', '#fbbf24', '#4ade80']
+
+function getTestMeta(results: ModelResult[]) {
+  const maxTestNum = results.reduce(
+    (m, r) => Math.max(m, ...r.tests.map(t => t.testNum)),
+    0,
+  )
+  const defs: { testNum: number; label: string; color: string }[] = []
+  for (let i = 1; i <= maxTestNum; i++) {
+    const isLast = i === maxTestNum
+    const label = isLast && maxTestNum > 1
+      ? maxTestNum === 3 ? 'Image 1+2' : 'All images'
+      : `Image ${i}`
+    defs.push({ testNum: i, label, color: ALL_TEST_COLORS[i - 1] ?? '#818cf8' })
+  }
+  return defs
+}
 
 function shortName(model: string, max = 12) {
   const name = model.split(':')[0]
@@ -141,7 +156,7 @@ function ModelResponseCard({ result }: { result: ModelResult }) {
                 <div className="flex items-center gap-2">
                   <div
                     className="w-2 h-2 rounded-full"
-                    style={{ background: TEST_COLORS[test.testNum - 1] }}
+                    style={{ background: ALL_TEST_COLORS[test.testNum - 1] ?? '#818cf8' }}
                   />
                   <span className="text-xs font-semibold text-slate-300">
                     {test.description}
@@ -176,22 +191,25 @@ function ModelResponseCard({ result }: { result: ModelResult }) {
 function EvaluationChart({
   evaluation,
   models,
+  testMeta,
   onRemove,
 }: {
   evaluation: Evaluation
   models: string[]
+  testMeta: { testNum: number; label: string; color: string }[]
   onRemove: () => void
 }) {
   const data = models.map((model) => {
     const entry = evaluation.evaluations.find((e) => e.model === model)
-    return {
+    const row: Record<string, string | number | undefined> = {
       name: shortName(model),
       fullName: model,
-      test1: entry?.tests.find((t) => t.testNum === 1)?.score,
-      test2: entry?.tests.find((t) => t.testNum === 2)?.score,
-      test3: entry?.tests.find((t) => t.testNum === 3)?.score,
       overall: entry?.overallScore,
     }
+    testMeta.forEach(td => {
+      row[`test${td.testNum}`] = entry?.tests.find((t) => t.testNum === td.testNum)?.score
+    })
+    return row
   })
 
   return (
@@ -219,12 +237,12 @@ function EvaluationChart({
           <YAxis domain={[0, 5]} tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} />
           <Tooltip content={<CustomTooltip />} />
           <Legend formatter={(v) => <span style={{ color: '#94a3b8', fontSize: 12 }}>{v}</span>} />
-          {TEST_LABELS.map((label, i) => (
+          {testMeta.map((td) => (
             <Bar
-              key={label}
-              dataKey={`test${i + 1}`}
-              name={label}
-              fill={TEST_COLORS[i]}
+              key={td.testNum}
+              dataKey={`test${td.testNum}`}
+              name={td.label}
+              fill={td.color}
               radius={[4, 4, 0, 0]}
               isAnimationActive
               animationDuration={700}
@@ -593,17 +611,21 @@ export default function ResultsPage({ results, prompt, image1, image2, evaluatio
   const [copiedPrompt, setCopiedPrompt] = useState(false)
 
   const models = results.map((r) => r.model)
+  const testMeta = useMemo(() => getTestMeta(results), [results])
 
   const durationChartData = useMemo(
     () =>
-      results.map((r) => ({
-        name: shortName(r.model),
-        fullName: r.model,
-        test1: r.tests.find((t) => t.testNum === 1)?.duration,
-        test2: r.tests.find((t) => t.testNum === 2)?.duration,
-        test3: r.tests.find((t) => t.testNum === 3)?.duration,
-      })),
-    [results],
+      results.map((r) => {
+        const row: Record<string, string | number | undefined> = {
+          name: shortName(r.model),
+          fullName: r.model,
+        }
+        testMeta.forEach(td => {
+          row[`test${td.testNum}`] = r.tests.find((t) => t.testNum === td.testNum)?.duration
+        })
+        return row
+      }),
+    [results, testMeta],
   )
 
   const fastestModel = useMemo(() => {
@@ -621,6 +643,8 @@ export default function ResultsPage({ results, prompt, image1, image2, evaluatio
   )
 
   function buildEvaluationPrompt() {
+    const imageCount = testMeta.length > 1 ? testMeta.length - 1 : 2
+    const testDescriptions = testMeta.map(td => `Test ${td.testNum} used ${td.label}`).join(', ')
     let text = `You are evaluating image analysis responses from local AI models.
 
 ORIGINAL PROMPT used for testing:
@@ -629,7 +653,7 @@ ${prompt}
 """
 
 IMPORTANT: Please also examine the test images I'm attaching to this message.
-There are 2 images. Test 1 used Image 1, Test 2 used Image 2, Test 3 used both.
+There are ${imageCount} image${imageCount !== 1 ? 's' : ''}. ${testDescriptions}.
 
 MODEL RESPONSES:
 `
@@ -640,6 +664,8 @@ MODEL RESPONSES:
       }
     }
 
+    const testLines = testMeta.map(td => `        {"testNum": ${td.testNum}, "score": <0-5>, "comment": "<brief comment>"}`).join(',\n')
+    const n = testMeta.length
     text += `
 ---
 
@@ -659,11 +685,9 @@ Return ONLY a JSON object in this EXACT format (no other text):
     {
       "model": "<model name>",
       "tests": [
-        {"testNum": 1, "score": <0-5>, "comment": "<brief comment>"},
-        {"testNum": 2, "score": <0-5>, "comment": "<brief comment>"},
-        {"testNum": 3, "score": <0-5>, "comment": "<brief comment>"}
+${testLines}
       ],
-      "overallScore": <average of 3 scores>,
+      "overallScore": <average of ${n} scores>,
       "summary": "<1-2 sentence overall assessment>"
     }
   ]
@@ -705,7 +729,7 @@ Return ONLY a JSON object in this EXACT format (no other text):
         <div>
           <h1 className="text-2xl font-bold gradient-text">Test Results</h1>
           <p className="text-slate-500 text-sm mt-1">
-            {results.length} models · {results.length * 3} tests completed
+            {results.length} models · {results.reduce((s, r) => s + r.tests.length, 0)} tests completed
           </p>
         </div>
         <div className="flex gap-3">
@@ -751,8 +775,8 @@ Return ONLY a JSON object in this EXACT format (no other text):
             <BarChart2 className="w-4 h-4 text-violet-400" />
             <span className="text-xs text-slate-500 uppercase tracking-wider">Tests Run</span>
           </div>
-          <p className="text-lg font-bold text-white">{results.length * 3}</p>
-          <p className="text-xs text-slate-500 mt-0.5">{results.length} models × 3</p>
+          <p className="text-lg font-bold text-white">{results.reduce((s, r) => s + r.tests.length, 0)}</p>
+          <p className="text-xs text-slate-500 mt-0.5">{results.length} models × {testMeta.length}</p>
         </div>
       </div>
 
@@ -773,12 +797,12 @@ Return ONLY a JSON object in this EXACT format (no other text):
             <YAxis tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} unit="s" />
             <Tooltip content={<CustomTooltip />} />
             <Legend formatter={(v) => <span style={{ color: '#94a3b8', fontSize: 12 }}>{v}</span>} />
-            {TEST_LABELS.map((label, i) => (
+            {testMeta.map((td, i) => (
               <Bar
-                key={label}
-                dataKey={`test${i + 1}`}
-                name={label}
-                fill={TEST_COLORS[i]}
+                key={td.testNum}
+                dataKey={`test${td.testNum}`}
+                name={td.label}
+                fill={td.color}
                 radius={[4, 4, 0, 0]}
                 isAnimationActive
                 animationDuration={900}
@@ -824,6 +848,7 @@ Return ONLY a JSON object in this EXACT format (no other text):
               key={ev.id}
               evaluation={ev}
               models={models}
+              testMeta={testMeta}
               onRemove={() => removeEvaluation(ev.id)}
             />
           ))}
