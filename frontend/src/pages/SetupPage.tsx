@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect } from 'react'
-import { Cpu, ImagePlus, Play, RefreshCw, CheckSquare, Square, X, AlertCircle, Zap, Copy, Check, History, Eye, Brain, ChevronDown, ChevronRight, Settings2 } from 'lucide-react'
+import { useState, useCallback, useEffect, useRef } from 'react'
+import { Cpu, ImagePlus, Play, RefreshCw, CheckSquare, Square, X, AlertCircle, Zap, Copy, Check, History, Eye, Brain, ChevronDown, ChevronRight, Settings2, Pencil, Tag } from 'lucide-react'
 import type { ImageData, Session, ModelResult, ModelInfo, LlmParams } from '../types'
 
 interface Props {
@@ -23,6 +23,10 @@ interface Props {
   onClearPrevious: () => void
   llmParams: LlmParams
   setLlmParams: (p: LlmParams) => void
+  sessionName: string
+  setSessionName: (n: string) => void
+  onRenameSession: (id: string, name: string) => void
+  onDeleteSession: (id: string) => void
 }
 
 function formatSize(bytes: number): string {
@@ -349,14 +353,29 @@ const STATUS_LABEL: Record<Session['status'], string> = {
   partial: 'Partial',
 }
 
+function formatParamsSummary(p?: LlmParams): string | null {
+  if (!p) return null
+  const parts: string[] = []
+  if (p.num_ctx !== null) parts.push(`ctx:${p.num_ctx}`)
+  if (p.temperature !== null) parts.push(`t:${p.temperature}`)
+  if (p.num_thread !== null) parts.push(`thr:${p.num_thread}`)
+  if (p.num_predict !== null) parts.push(`max:${p.num_predict}`)
+  if (p.keep_alive) parts.push(`ka:${p.keep_alive}`)
+  return parts.length > 0 ? parts.join(' · ') : null
+}
+
 function SessionCard({
   session,
   onView,
   onResume,
+  onRename,
+  onDelete,
 }: {
   session: Session
   onView: () => void
   onResume: () => void
+  onRename: (name: string) => void
+  onDelete: () => void
 }) {
   const totalTests = session.models.length * 3
   const doneTests = session.results.reduce((s, r) => s + r.tests.length, 0)
@@ -366,18 +385,79 @@ function SessionCard({
   const shownNames = modelNames.slice(0, 2).join(', ')
   const extraCount = modelNames.length > 2 ? ` +${modelNames.length - 2}` : ''
   const doneModelCount = session.results.filter(r => r.tests.length === 3).length
+  const paramsSummary = formatParamsSummary(session.llmParams)
+
+  const [renaming, setRenaming] = useState(false)
+  const [nameInput, setNameInput] = useState(session.name || '')
+  const renameRef = useRef<HTMLInputElement>(null)
+
+  function startRename() {
+    setNameInput(session.name || '')
+    setRenaming(true)
+    setTimeout(() => renameRef.current?.focus(), 0)
+  }
+
+  function commitRename() {
+    onRename(nameInput)
+    setRenaming(false)
+  }
 
   return (
     <div className="glass rounded-xl p-3 mb-2">
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex items-center justify-between mb-1.5">
         <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${STATUS_STYLE[session.status]}`}>
           {STATUS_LABEL[session.status]}
         </span>
-        <span className="text-[10px] text-slate-600">{formatTimeAgo(session.startedAt)}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-slate-600">{formatTimeAgo(session.startedAt)}</span>
+          <button
+            onClick={onDelete}
+            className="text-slate-700 hover:text-red-400 transition-colors"
+            title="Delete session"
+          >
+            <X className="w-3 h-3" />
+          </button>
+        </div>
       </div>
-      <p className="text-xs text-slate-300 mb-2 truncate" title={modelNames.join(', ')}>
+
+      {/* Session name row */}
+      <div className="flex items-center gap-1 mb-1.5 min-h-[20px]">
+        {renaming ? (
+          <input
+            ref={renameRef}
+            value={nameInput}
+            onChange={e => setNameInput(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setRenaming(false) }}
+            placeholder="Add a name…"
+            className="flex-1 text-xs bg-slate-800/80 border border-violet-500/50 rounded px-2 py-0.5 text-slate-200 outline-none"
+          />
+        ) : (
+          <>
+            {session.name ? (
+              <span className="text-xs font-semibold text-white truncate flex-1">{session.name}</span>
+            ) : (
+              <span className="text-[10px] text-slate-600 italic flex-1">Unnamed</span>
+            )}
+            <button
+              onClick={startRename}
+              className="text-slate-600 hover:text-slate-400 transition-colors shrink-0"
+              title="Rename"
+            >
+              <Pencil className="w-3 h-3" />
+            </button>
+          </>
+        )}
+      </div>
+
+      <p className="text-[11px] text-slate-500 mb-1.5 truncate" title={modelNames.join(', ')}>
         {shownNames}{extraCount}
       </p>
+
+      {paramsSummary && (
+        <p className="text-[10px] text-slate-600 mb-2 truncate font-mono">{paramsSummary}</p>
+      )}
+
       <div className="mb-2.5">
         <div className="flex justify-between text-[10px] text-slate-600 mb-1">
           <span>{session.models.length} models</span>
@@ -452,6 +532,10 @@ export default function SetupPage({
   onClearPrevious,
   llmParams,
   setLlmParams,
+  sessionName,
+  setSessionName,
+  onRenameSession,
+  onDeleteSession,
 }: Props) {
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([])
   const [scanning, setScanning] = useState(false)
@@ -747,6 +831,23 @@ export default function SetupPage({
             </p>
           </section>
 
+          {/* Session name */}
+          <section className="mb-6 fade-up" style={{ animationDelay: '0.18s' }}>
+            <h2 className="text-sm font-semibold uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
+              <Tag className="w-4 h-4" />
+              Test Name
+              <span className="normal-case tracking-normal font-normal text-xs text-slate-600">optional</span>
+            </h2>
+            <input
+              type="text"
+              value={sessionName}
+              onChange={e => setSessionName(e.target.value)}
+              placeholder="e.g. llava comparison temp=0.7…"
+              className="w-full bg-slate-800/60 border border-slate-700/60 rounded-xl px-4 py-2.5 text-sm text-slate-200
+                placeholder:text-slate-600 outline-none focus:border-violet-500/60 focus:ring-1 focus:ring-violet-500/30 transition-all"
+            />
+          </section>
+
           {/* Start */}
           <div className="fade-up flex items-center justify-between" style={{ animationDelay: '0.2s' }}>
             <div className="text-sm text-slate-500">
@@ -791,6 +892,8 @@ export default function SetupPage({
                 session={session}
                 onView={() => onViewSession(session)}
                 onResume={() => onResumeSession(session)}
+                onRename={(name) => onRenameSession(session.id, name)}
+                onDelete={() => onDeleteSession(session.id)}
               />
             ))}
           </div>

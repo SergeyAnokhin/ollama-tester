@@ -8,6 +8,7 @@ import {
   CartesianGrid,
   Tooltip,
   Legend,
+  Cell,
 } from 'recharts'
 import {
   Download,
@@ -25,8 +26,12 @@ import {
   RefreshCw,
   Eye,
   EyeOff,
+  ThumbsUp,
+  ThumbsDown,
+  Info,
+  Trash2,
 } from 'lucide-react'
-import type { ModelResult, Evaluation, ImageData } from '../types'
+import type { ModelResult, Evaluation, ImageData, LlmParams, TestResult, OllamaRawMeta } from '../types'
 import { v4 as uuidv4 } from '../uuid'
 
 interface Props {
@@ -37,6 +42,9 @@ interface Props {
   evaluations: Evaluation[]
   setEvaluations: (e: Evaluation[]) => void
   onNewTest: () => void
+  llmParams?: LlmParams
+  onRateTest: (model: string, testNum: number, rating: TestResult['rating']) => void
+  onDeleteModel: (model: string) => void
 }
 
 // ── Gemini pricing table (approximate, per million tokens, June 2025) ─────────
@@ -116,13 +124,130 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   )
 }
 
-function ModelResponseCard({ result }: { result: ModelResult }) {
+function isErrorResponse(response: string): boolean {
+  return !response.trim() || response.startsWith('Error:')
+}
+
+function MetaModal({ meta, onClose }: { meta: OllamaRawMeta; onClose: () => void }) {
+  const ns = (n?: number) => n !== undefined ? `${(n / 1e9).toFixed(3)}s` : '—'
+  const tokPerSec =
+    meta.eval_count && meta.eval_duration
+      ? (meta.eval_count / (meta.eval_duration / 1e9)).toFixed(1)
+      : null
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="glass rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-bold text-white flex items-center gap-2">
+            <Info className="w-4 h-4 text-blue-400" /> API Response Metadata
+          </h3>
+          <button
+            onClick={onClose}
+            className="text-slate-500 hover:text-slate-300 transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="space-y-2 text-xs">
+          {meta.model && (
+            <div className="flex justify-between gap-4">
+              <span className="text-slate-500">Model</span>
+              <span className="text-slate-300 font-mono truncate">{meta.model}</span>
+            </div>
+          )}
+          {meta.done_reason && (
+            <div className="flex justify-between gap-4">
+              <span className="text-slate-500">Stop reason</span>
+              <span className={`font-mono font-semibold ${meta.done_reason === 'length' ? 'text-amber-400' : 'text-emerald-400'}`}>
+                {meta.done_reason}
+                {meta.done_reason === 'length' && ' ⚠ truncated'}
+              </span>
+            </div>
+          )}
+          <div className="border-t border-white/5 pt-2 mt-2" />
+          {meta.prompt_eval_count !== undefined && (
+            <div className="flex justify-between gap-4">
+              <span className="text-slate-500">Input tokens</span>
+              <span className="text-slate-300 font-mono">{meta.prompt_eval_count}</span>
+            </div>
+          )}
+          {meta.eval_count !== undefined && (
+            <div className="flex justify-between gap-4">
+              <span className="text-slate-500">Output tokens</span>
+              <span className="text-slate-300 font-mono">{meta.eval_count}</span>
+            </div>
+          )}
+          {tokPerSec && (
+            <div className="flex justify-between gap-4">
+              <span className="text-slate-500">Tokens/sec</span>
+              <span className="text-violet-400 font-mono font-semibold">{tokPerSec} tok/s</span>
+            </div>
+          )}
+          <div className="border-t border-white/5 pt-2 mt-2" />
+          {meta.total_duration !== undefined && (
+            <div className="flex justify-between gap-4">
+              <span className="text-slate-500">Total duration</span>
+              <span className="text-slate-300 font-mono">{ns(meta.total_duration)}</span>
+            </div>
+          )}
+          {meta.load_duration !== undefined && (
+            <div className="flex justify-between gap-4">
+              <span className="text-slate-500">Load duration</span>
+              <span className="text-slate-300 font-mono">{ns(meta.load_duration)}</span>
+            </div>
+          )}
+          {meta.prompt_eval_duration !== undefined && (
+            <div className="flex justify-between gap-4">
+              <span className="text-slate-500">Prompt eval</span>
+              <span className="text-slate-300 font-mono">{ns(meta.prompt_eval_duration)}</span>
+            </div>
+          )}
+          {meta.eval_duration !== undefined && (
+            <div className="flex justify-between gap-4">
+              <span className="text-slate-500">Generation</span>
+              <span className="text-slate-300 font-mono">{ns(meta.eval_duration)}</span>
+            </div>
+          )}
+          {meta.created_at && (
+            <div className="flex justify-between gap-4">
+              <span className="text-slate-500">Created at</span>
+              <span className="text-slate-500 font-mono">
+                {new Date(meta.created_at).toLocaleTimeString()}
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ModelResponseCard({
+  result,
+  onRateTest,
+  onDelete,
+}: {
+  result: ModelResult
+  onRateTest: (testNum: number, rating: TestResult['rating']) => void
+  onDelete: () => void
+}) {
   const [open, setOpen] = useState(false)
   const [openTest, setOpenTest] = useState<number | null>(null)
+  const [metaModal, setMetaModal] = useState<OllamaRawMeta | null>(null)
   const fastest = result.tests.reduce((a, b) => (a.duration < b.duration ? a : b))
+  const tokInp = result.tests.reduce((s, t) => s + (t.rawMeta?.prompt_eval_count ?? 0), 0)
+  const tokOut = result.tests.reduce((s, t) => s + (t.rawMeta?.eval_count ?? 0), 0)
 
   return (
     <div className="glass rounded-2xl overflow-hidden">
+      {metaModal && <MetaModal meta={metaModal} onClose={() => setMetaModal(null)} />}
       <button
         onClick={() => setOpen(!open)}
         className="w-full flex items-center justify-between p-4 hover:bg-white/5 transition-colors"
@@ -135,14 +260,44 @@ function ModelResponseCard({ result }: { result: ModelResult }) {
             <p className="text-sm font-semibold text-white">{result.model}</p>
             <p className="text-xs text-slate-500">
               {result.tests.length} tests · fastest: {fastest.duration}s ({fastest.description})
+              {tokInp > 0 && (
+                <span className="text-slate-600 font-mono"> · ↑{tokInp.toLocaleString()} ↓{tokOut.toLocaleString()} tok</span>
+              )}
             </p>
           </div>
         </div>
-        {open ? (
-          <ChevronUp className="w-4 h-4 text-slate-500" />
-        ) : (
-          <ChevronDown className="w-4 h-4 text-slate-500" />
-        )}
+        <div className="flex items-center gap-3">
+          {/* Per-test rating summary, read-only */}
+          <div className="flex items-center gap-1.5">
+            {result.tests.map(test => (
+              <div
+                key={test.testNum}
+                title={`${test.description}: ${test.rating ?? 'unrated'}`}
+                className="flex items-center justify-center w-5 h-5"
+              >
+                {test.rating === 'like' ? (
+                  <ThumbsUp className="w-3.5 h-3.5 text-emerald-400" />
+                ) : test.rating === 'dislike' ? (
+                  <ThumbsDown className="w-3.5 h-3.5 text-red-400" />
+                ) : (
+                  <div className="w-3 h-3 rounded-full border border-slate-700" />
+                )}
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={e => { e.stopPropagation(); onDelete() }}
+            className="p-1 rounded text-slate-700 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+            title="Delete result"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+          {open ? (
+            <ChevronUp className="w-4 h-4 text-slate-500" />
+          ) : (
+            <ChevronDown className="w-4 h-4 text-slate-500" />
+          )}
+        </div>
       </button>
 
       {open && (
@@ -156,14 +311,43 @@ function ModelResponseCard({ result }: { result: ModelResult }) {
                 <div className="flex items-center gap-2">
                   <div
                     className="w-2 h-2 rounded-full"
-                    style={{ background: ALL_TEST_COLORS[test.testNum - 1] ?? '#818cf8' }}
+                    style={{ background: test.rating === 'dislike' ? '#6b7280' : (ALL_TEST_COLORS[test.testNum - 1] ?? '#818cf8') }}
                   />
-                  <span className="text-xs font-semibold text-slate-300">
+                  <span className={`text-xs font-semibold ${test.rating === 'dislike' ? 'text-slate-500' : 'text-slate-300'}`}>
                     {test.description}
                   </span>
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-xs font-mono text-slate-400">{test.duration}s</span>
+                <div className="flex items-center gap-2">
+                  {/* Rating buttons */}
+                  <button
+                    onClick={e => { e.stopPropagation(); onRateTest(test.testNum, test.rating === 'like' ? undefined : 'like') }}
+                    className={`p-1 rounded transition-colors ${test.rating === 'like' ? 'text-emerald-400' : 'text-slate-600 hover:text-emerald-500'}`}
+                    title="Like"
+                  >
+                    <ThumbsUp className="w-3 h-3" />
+                  </button>
+                  <button
+                    onClick={e => { e.stopPropagation(); onRateTest(test.testNum, test.rating === 'dislike' ? undefined : 'dislike') }}
+                    className={`p-1 rounded transition-colors ${test.rating === 'dislike' ? 'text-red-400' : 'text-slate-600 hover:text-red-500'}`}
+                    title="Dislike"
+                  >
+                    <ThumbsDown className="w-3 h-3" />
+                  </button>
+                  {test.rawMeta && (
+                    <button
+                      onClick={e => { e.stopPropagation(); setMetaModal(test.rawMeta!) }}
+                      className="p-1 rounded text-slate-600 hover:text-blue-400 transition-colors"
+                      title="API metadata"
+                    >
+                      <Info className="w-3 h-3" />
+                    </button>
+                  )}
+                  {test.rawMeta?.prompt_eval_count !== undefined && (
+                    <span className="text-xs font-mono text-slate-600" title="Input / output tokens">
+                      ↑{test.rawMeta.prompt_eval_count.toLocaleString()} ↓{(test.rawMeta.eval_count ?? 0).toLocaleString()}
+                    </span>
+                  )}
+                  <span className="text-xs font-mono text-slate-400 ml-1">{test.duration}s</span>
                   {openTest === test.testNum ? (
                     <ChevronUp className="w-3 h-3 text-slate-500" />
                   ) : (
@@ -173,11 +357,15 @@ function ModelResponseCard({ result }: { result: ModelResult }) {
               </button>
               {openTest === test.testNum && (
                 <div className="px-3 pb-3 border-t border-white/5 pt-2">
-                  <p className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">
-                    {test.response || (
-                      <span className="text-slate-600 italic">No response</span>
-                    )}
-                  </p>
+                  {isErrorResponse(test.response) ? (
+                    <p className="text-xs text-red-400 leading-relaxed whitespace-pre-wrap">
+                      {test.response || 'Empty response from model'}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">
+                      {test.response}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -607,7 +795,7 @@ function GeminiEvalSection({
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function ResultsPage({ results, prompt, image1, image2, evaluations, setEvaluations, onNewTest }: Props) {
+export default function ResultsPage({ results, prompt, image1, image2, evaluations, setEvaluations, onNewTest, llmParams, onRateTest, onDeleteModel }: Props) {
   const [copiedPrompt, setCopiedPrompt] = useState(false)
 
   const models = results.map((r) => r.model)
@@ -630,12 +818,36 @@ export default function ResultsPage({ results, prompt, image1, image2, evaluatio
 
   const fastestModel = useMemo(() => {
     if (!results.length) return null
-    const avgs = results.map((r) => ({
-      model: r.model,
-      avg: r.tests.reduce((s, t) => s + t.duration, 0) / r.tests.length,
-    }))
+    const avgs = results
+      .map((r) => {
+        const valid = r.tests.filter(t => t.rating !== 'dislike')
+        if (!valid.length) return null
+        return { model: r.model, avg: valid.reduce((s, t) => s + t.duration, 0) / valid.length }
+      })
+      .filter((x): x is { model: string; avg: number } => x !== null)
+    if (!avgs.length) return null
     return avgs.reduce((a, b) => (a.avg < b.avg ? a : b))
   }, [results])
+
+  const bestQualityModel = useMemo(() => {
+    if (!results.length) return null
+    const scored = results.map(r => ({
+      model: r.model,
+      likes: r.tests.filter(t => t.rating === 'like').length,
+      dislikes: r.tests.filter(t => t.rating === 'dislike').length,
+      total: r.tests.length,
+    }))
+    const withLikes = scored.filter(s => s.likes > 0)
+    if (!withLikes.length) return null
+    return withLikes.reduce((a, b) =>
+      a.likes > b.likes ? a : b.likes > a.likes ? b : a.dislikes <= b.dislikes ? a : b
+    )
+  }, [results])
+
+  const hasAnyDisliked = useMemo(
+    () => results.some(r => r.tests.some(t => t.rating === 'dislike')),
+    [results],
+  )
 
   const totalDuration = useMemo(
     () => results.flatMap((r) => r.tests).reduce((s, t) => s + t.duration, 0),
@@ -699,6 +911,7 @@ ${testLines}
     const exportData = {
       exportedAt: new Date().toISOString(),
       prompt,
+      llmParams: llmParams ?? null,
       models,
       results,
       evaluationPrompt: buildEvaluationPrompt(),
@@ -757,8 +970,39 @@ ${testLines}
             <Trophy className="w-4 h-4 text-yellow-400" />
             <span className="text-xs text-slate-500 uppercase tracking-wider">Fastest</span>
           </div>
-          <p className="text-lg font-bold text-white">{fastestModel?.model.split(':')[0]}</p>
-          <p className="text-xs text-slate-500 mt-0.5">avg {fastestModel?.avg.toFixed(1)}s/test</p>
+          {fastestModel ? (
+            <>
+              <p className="text-lg font-bold text-white">{fastestModel.model.split(':')[0]}</p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                avg {fastestModel.avg.toFixed(1)}s/test
+                {hasAnyDisliked && <span className="text-slate-600"> · excl. disliked</span>}
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-lg font-bold text-slate-600">—</p>
+              <p className="text-xs text-slate-600 mt-0.5">all results disliked</p>
+            </>
+          )}
+        </div>
+        <div className="glass rounded-2xl p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <Star className="w-4 h-4 text-emerald-400" />
+            <span className="text-xs text-slate-500 uppercase tracking-wider">Best Quality</span>
+          </div>
+          {bestQualityModel ? (
+            <>
+              <p className="text-lg font-bold text-white">{bestQualityModel.model.split(':')[0]}</p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {bestQualityModel.likes}/{bestQualityModel.total} liked
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-lg font-bold text-slate-600">—</p>
+              <p className="text-xs text-slate-600 mt-0.5">like a result to rank</p>
+            </>
+          )}
         </div>
         <div className="glass rounded-2xl p-4">
           <div className="flex items-center gap-2 mb-2">
@@ -770,21 +1014,21 @@ ${testLines}
             {(totalDuration / 60).toFixed(1)} min
           </p>
         </div>
-        <div className="glass rounded-2xl p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <BarChart2 className="w-4 h-4 text-violet-400" />
-            <span className="text-xs text-slate-500 uppercase tracking-wider">Tests Run</span>
-          </div>
-          <p className="text-lg font-bold text-white">{results.reduce((s, r) => s + r.tests.length, 0)}</p>
-          <p className="text-xs text-slate-500 mt-0.5">{results.length} models × {testMeta.length}</p>
-        </div>
       </div>
 
       {/* Duration Chart */}
       <div className="glass rounded-2xl p-6 mb-6 fade-up" style={{ animationDelay: '0.1s' }}>
-        <p className="text-xs text-slate-500 uppercase tracking-wider mb-6">
-          Response Time (seconds)
-        </p>
+        <div className="flex items-center justify-between mb-6">
+          <p className="text-xs text-slate-500 uppercase tracking-wider">
+            Response Time (seconds)
+          </p>
+          {results.some(r => r.tests.some(t => t.rating === 'dislike')) && (
+            <div className="flex items-center gap-1.5 text-xs text-slate-500">
+              <div className="w-3 h-3 rounded-sm bg-slate-600 opacity-60" />
+              <span>Disliked result</span>
+            </div>
+          )}
+        </div>
         <ResponsiveContainer width="100%" height={280}>
           <BarChart
             data={durationChartData}
@@ -807,7 +1051,18 @@ ${testLines}
                 isAnimationActive
                 animationDuration={900}
                 animationBegin={i * 150}
-              />
+              >
+                {results.map((r) => {
+                  const disliked = r.tests.find(t => t.testNum === td.testNum)?.rating === 'dislike'
+                  return (
+                    <Cell
+                      key={r.model}
+                      fill={disliked ? '#4b5563' : td.color}
+                      fillOpacity={disliked ? 0.55 : 1}
+                    />
+                  )
+                })}
+              </Bar>
             ))}
           </BarChart>
         </ResponsiveContainer>
@@ -820,7 +1075,12 @@ ${testLines}
         </h2>
         <div className="space-y-3">
           {results.map((r) => (
-            <ModelResponseCard key={r.model} result={r} />
+            <ModelResponseCard
+              key={r.model}
+              result={r}
+              onRateTest={(testNum, rating) => onRateTest(r.model, testNum, rating)}
+              onDelete={() => onDeleteModel(r.model)}
+            />
           ))}
         </div>
       </div>

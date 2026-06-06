@@ -11,7 +11,7 @@ import {
   Cell,
 } from 'recharts'
 import { ArrowLeft, CheckCircle, Clock, Circle, Loader2, Pause, Play, Square } from 'lucide-react'
-import type { ModelResult, SystemStats, ModelStatus, ImageData, LlmParams } from '../types'
+import type { ModelResult, SystemStats, ModelStatus, ImageData, LlmParams, OllamaRawMeta } from '../types'
 
 interface Props {
   models: string[]
@@ -32,20 +32,22 @@ interface LiveResult {
   testNum: number
   duration: number
   response: string
+  rawMeta?: OllamaRawMeta
+}
+
+function isErrorResponse(response: string): boolean {
+  return !response.trim() || response.startsWith('Error:')
 }
 
 const ALL_COLORS = ['#818cf8', '#34d399', '#fb923c', '#f472b6', '#facc15']
 
 function getTestDefs(images: (ImageData | null)[]) {
   const loaded = images.filter(Boolean) as ImageData[]
-  const defs = loaded.map((_, i) => ({
-    testNum: i + 1,
-    label: `Image ${i + 1}`,
-    color: ALL_COLORS[i],
-  }))
   const allLabel = loaded.length === 2 ? 'Image 1+2' : 'All images'
-  defs.push({ testNum: loaded.length + 1, label: allLabel, color: ALL_COLORS[loaded.length] })
-  return defs
+  return [
+    { testNum: 1, label: 'Image 1', color: ALL_COLORS[0] },
+    { testNum: 2, label: allLabel, color: ALL_COLORS[1] },
+  ]
 }
 
 function buildModelResults(liveResults: LiveResult[], models: string[]): ModelResult[] {
@@ -60,6 +62,8 @@ function buildModelResults(liveResults: LiveResult[], models: string[]): ModelRe
           description: `Test ${r.testNum}`,
           duration: r.duration,
           response: r.response,
+          rawMeta: r.rawMeta,
+          rating: isErrorResponse(r.response) ? 'dislike' as const : undefined,
         }))
         .sort((a, b) => a.testNum - b.testNum),
     }))
@@ -218,6 +222,7 @@ export default function TestingPage({ models, prompt, image1, image2, image3, im
             testNum: msg.testNum,
             duration: msg.duration,
             response: msg.response,
+            rawMeta: msg.rawMeta,
           }
           completedRef.current = [...completedRef.current, newResult]
           setCompleted(completedRef.current)

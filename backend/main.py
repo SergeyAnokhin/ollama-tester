@@ -141,6 +141,14 @@ def _parse_keep_alive(val: str):
         return val
 
 
+_KEEP_META = {
+    "model", "created_at", "done_reason",
+    "total_duration", "load_duration",
+    "prompt_eval_count", "prompt_eval_duration",
+    "eval_count", "eval_duration",
+}
+
+
 async def _run_generate(
     model: str,
     prompt: str,
@@ -148,7 +156,7 @@ async def _run_generate(
     ws: WebSocket,
     test_num: int,
     llm_params: dict | None = None,
-) -> tuple[float, str]:
+) -> tuple[float, str, dict]:
     payload: dict = {"model": model, "prompt": prompt, "images": images, "stream": True}
 
     options: dict = {}
@@ -172,6 +180,7 @@ async def _run_generate(
 
     start = time.monotonic()
     tokens: list[str] = []
+    raw_meta: dict = {}
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(600)) as client:
         async with client.stream(
@@ -201,9 +210,10 @@ async def _run_generate(
                     except Exception:
                         pass
                 if obj.get("done"):
+                    raw_meta = {k: v for k, v in obj.items() if k in _KEEP_META}
                     break
 
-    return round(time.monotonic() - start, 2), "".join(tokens)
+    return round(time.monotonic() - start, 2), "".join(tokens), raw_meta
 
 
 async def _unload_model(model: str) -> None:
@@ -273,9 +283,11 @@ async def ws_test(ws: WebSocket):
         llm_params: dict | None = cfg.get("llmParams")
 
         loaded_images = [img1, img2] + ([img3] if img3 else []) + ([img4] if img4 else [])
-        individual_tests = [(i + 1, [img], f"Image {i + 1}") for i, img in enumerate(loaded_images)]
         all_label = "Image 1 + 2" if len(loaded_images) == 2 else "All images"
-        test_defs = individual_tests + [(len(loaded_images) + 1, loaded_images, all_label)]
+        test_defs = [
+            (1, [loaded_images[0]], "Image 1"),
+            (2, loaded_images, all_label),
+        ]
 
         sid = str(uuid.uuid4())
         await ws.send_json({"type": "session_started", "sessionId": sid})
@@ -323,8 +335,9 @@ async def ws_test(ws: WebSocket):
                 )
                 current_task.clear()
                 current_task.append(task)
+                raw_meta: dict = {}
                 try:
-                    duration, response = await task
+                    duration, response, raw_meta = await task
                 except asyncio.CancelledError:
                     # Stop was pressed: kill Ollama model and exit immediately
                     asyncio.create_task(_unload_model(model))
@@ -335,6 +348,12 @@ async def ws_test(ws: WebSocket):
                 finally:
                     current_task.clear()
 
+                print(
+                    f"[{model}] Test {test_num} done | tokens in={raw_meta.get('prompt_eval_count', '?')} "
+                    f"out={raw_meta.get('eval_count', '?')} reason={raw_meta.get('done_reason', '?')}",
+                    flush=True,
+                )
+
                 await ws.send_json(
                     {
                         "type": "test_complete",
@@ -343,6 +362,7 @@ async def ws_test(ws: WebSocket):
                         "totalTests": len(test_defs),
                         "duration": duration,
                         "response": response,
+                        "rawMeta": raw_meta,
                     }
                 )
                 model_tests.append(
@@ -351,6 +371,7 @@ async def ws_test(ws: WebSocket):
                         "description": desc,
                         "duration": duration,
                         "response": response,
+                        "rawMeta": raw_meta,
                     }
                 )
 

@@ -1,8 +1,22 @@
+export interface OllamaRawMeta {
+  model?: string
+  created_at?: string
+  done_reason?: string
+  total_duration?: number
+  load_duration?: number
+  prompt_eval_count?: number
+  prompt_eval_duration?: number
+  eval_count?: number
+  eval_duration?: number
+}
+
 export interface TestResult {
   testNum: number;
   description: string;
   duration: number;
   response: string;
+  rating?: 'like' | 'dislike';
+  rawMeta?: OllamaRawMeta;
 }
 
 export interface ModelResult {
@@ -84,6 +98,7 @@ export interface Session {
   id: string
   startedAt: number
   status: 'running' | 'complete' | 'stopped' | 'partial'
+  name?: string
   models: string[]
   prompt: string
   image1Name: string
@@ -91,4 +106,5 @@ export interface Session {
   image3Name?: string
   image4Name?: string
   results: ModelResult[]
+  llmParams?: LlmParams
 }

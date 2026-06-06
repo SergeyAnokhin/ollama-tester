@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import SetupPage from './pages/SetupPage'
 import TestingPage from './pages/TestingPage'
 import ResultsPage from './pages/ResultsPage'
-import type { AppPage, ImageData, ModelResult, Evaluation, Session, LlmParams } from './types'
+import type { AppPage, ImageData, ModelResult, Evaluation, Session, LlmParams, TestResult } from './types'
 import { DEFAULT_LLM_PARAMS } from './types'
 import { v4 as uuidv4 } from './uuid'
 
@@ -72,20 +72,24 @@ export default function App() {
   const [llmParams, setLlmParams] = useState<LlmParams>(
     (saved.llmParams as LlmParams) || DEFAULT_LLM_PARAMS,
   )
+  const [sessionName, setSessionName] = useState<string>(
+    (saved.sessionName as string) || '',
+  )
   const [testResults, setTestResults] = useState<ModelResult[]>([])
   const [evaluations, setEvaluations] = useState<Evaluation[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const [resultsSessionId, setResultsSessionId] = useState<string | null>(null)
   const [previousResults, setPreviousResults] = useState<ModelResult[]>([])
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ selectedModels, prompt, image1, image2, image3, image4, llmParams }))
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ selectedModels, prompt, image1, image2, image3, image4, llmParams, sessionName }))
     } catch {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify({ selectedModels, prompt }))
       } catch { /* ignore */ }
     }
-  }, [selectedModels, prompt, image1, image2, image3, image4, llmParams])
+  }, [selectedModels, prompt, image1, image2, image3, image4, llmParams, sessionName])
 
   function createSession(): string {
     const id = uuidv4()
@@ -97,6 +101,7 @@ export default function App() {
       id,
       startedAt: Date.now(),
       status: 'running',
+      name: sessionName.trim() || undefined,
       models: allModels,
       prompt,
       image1Name: image1?.name || '',
@@ -104,6 +109,7 @@ export default function App() {
       image3Name: image3?.name || '',
       image4Name: image4?.name || '',
       results: [...previousResults],
+      llmParams,
     }
     setSessions(prev => {
       const updated = [session, ...prev].slice(0, MAX_SESSIONS)
@@ -122,6 +128,22 @@ export default function App() {
     })
   }
 
+  function deleteSession(id: string) {
+    setSessions(prev => {
+      const updated = prev.filter(s => s.id !== id)
+      saveSessions(updated)
+      return updated
+    })
+  }
+
+  function renameSession(id: string, name: string) {
+    setSessions(prev => {
+      const updated = prev.map(s => s.id === id ? { ...s, name: name.trim() || undefined } : s)
+      saveSessions(updated)
+      return updated
+    })
+  }
+
   function handleStartTest() {
     createSession()
     setPage('testing')
@@ -131,7 +153,30 @@ export default function App() {
     setTestResults([...previousResults, ...newResults])
     setEvaluations([])
     setPreviousResults([])
+    setResultsSessionId(activeSessionId)
     setPage('results')
+  }
+
+  function handleRateTest(model: string, testNum: number, rating: TestResult['rating']) {
+    const applyRating = (results: ModelResult[]) =>
+      results.map(r =>
+        r.model !== model ? r : {
+          ...r,
+          tests: r.tests.map(t =>
+            t.testNum !== testNum ? t : { ...t, rating: rating ?? undefined },
+          ),
+        },
+      )
+    setTestResults(prev => applyRating(prev))
+    if (resultsSessionId) {
+      setSessions(prev => {
+        const updated = prev.map(s =>
+          s.id === resultsSessionId ? { ...s, results: applyRating(s.results) } : s,
+        )
+        saveSessions(updated)
+        return updated
+      })
+    }
   }
 
   function handleTestingBack() {
@@ -149,9 +194,26 @@ export default function App() {
     setPage('setup')
   }
 
+  function handleDeleteModel(model: string) {
+    const filtered = testResults.filter(r => r.model !== model)
+    setTestResults(filtered)
+    if (resultsSessionId) {
+      setSessions(prev => {
+        const updated = prev.map(s =>
+          s.id === resultsSessionId
+            ? { ...s, results: s.results.filter(r => r.model !== model) }
+            : s
+        )
+        saveSessions(updated)
+        return updated
+      })
+    }
+  }
+
   function handleNewTest() {
     setTestResults([])
     setEvaluations([])
+    setResultsSessionId(null)
     setPage('setup')
   }
 
@@ -159,6 +221,7 @@ export default function App() {
     if (session.results.length === 0) return
     setTestResults(session.results)
     setEvaluations([])
+    setResultsSessionId(session.id)
     setPage('results')
   }
 
@@ -198,6 +261,10 @@ export default function App() {
         onClearPrevious={() => setPreviousResults([])}
         llmParams={llmParams}
         setLlmParams={setLlmParams}
+        sessionName={sessionName}
+        setSessionName={setSessionName}
+        onRenameSession={renameSession}
+        onDeleteSession={deleteSession}
       />
     )
   }
@@ -229,6 +296,9 @@ export default function App() {
       evaluations={evaluations}
       setEvaluations={setEvaluations}
       onNewTest={handleNewTest}
+      llmParams={llmParams}
+      onRateTest={handleRateTest}
+      onDeleteModel={handleDeleteModel}
     />
   )
 }

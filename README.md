@@ -190,6 +190,14 @@ npm run dev
 
 ---
 
+## Documentation
+
+| Doc | What's inside |
+|-----|--------------|
+| [docs/architecture.md](docs/architecture.md) | File map, state flow, session lifecycle, WebSocket protocol, storage keys, where to make common changes |
+
+---
+
 ## Architecture
 
 ```
@@ -200,11 +208,11 @@ backend/
 frontend/
   src/
     pages/
-      SetupPage.tsx    Model selection, prompt editor, image upload (up to 4)
+      SetupPage.tsx    Model selection, prompt editor, image upload, LLM params, session name, history
       TestingPage.tsx  Live WebSocket monitor, animated chart, system stats
       ResultsPage.tsx  Bar charts, response browser, export, evaluation import
-    types.ts
-    App.tsx
+    App.tsx          Root state, page routing, session CRUD
+    types.ts         All shared interfaces
   public/
     favicon.svg      App icon
 ```
