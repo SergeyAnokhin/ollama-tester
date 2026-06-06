@@ -564,6 +564,10 @@ export default function SetupPage({
     return () => clearInterval(interval)
   }, [])
 
+  useEffect(() => {
+    scanModels()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   async function scanModels() {
     setScanning(true)
     setScanError(null)
@@ -586,7 +590,9 @@ export default function SetupPage({
         throw new Error('Запустите Python backend: cd backend && uvicorn main:app --port 8001')
       }
       setAvailableModels(data.models)
-      setSelectedModels(data.models.map(m => m.name))
+      const newNames = data.models.map(m => m.name)
+      const savedSelection = selectedModels.filter(name => newNames.includes(name))
+      setSelectedModels(savedSelection.length > 0 ? savedSelection : newNames)
       setScanned(true)
     } catch (e: unknown) {
       setScanError(e instanceof Error ? e.message : 'Неизвестная ошибка')
@@ -672,64 +678,71 @@ export default function SetupPage({
                 <Cpu className="w-4 h-4" />
                 Models
               </h2>
-              {scanned && availableModels.length > 0 && (
-                <div className="flex items-center gap-3 text-xs">
-                  <button
-                    onClick={() => setSelectedModels(availableModels.map(m => m.name))}
-                    className="text-violet-400 hover:text-violet-300 transition-colors"
-                  >
-                    Select all
-                  </button>
-                  <span className="text-slate-600">·</span>
-                  <button
-                    onClick={() => setSelectedModels([])}
-                    className="text-slate-500 hover:text-slate-400 transition-colors"
-                  >
-                    Deselect all
-                  </button>
-                  {selectedModels.length > 0 && (
-                    <>
-                      <span className="text-slate-600">·</span>
-                      <button
-                        onClick={() => {
-                          navigator.clipboard.writeText(selectedModels.join('\n'))
-                          setCopiedModels(true)
-                          setTimeout(() => setCopiedModels(false), 2000)
-                        }}
-                        className="flex items-center gap-1 text-slate-400 hover:text-emerald-400 transition-colors"
-                      >
-                        {copiedModels ? (
-                          <><Check className="w-3 h-3 text-emerald-400" /> Copied!</>
-                        ) : (
-                          <><Copy className="w-3 h-3" /> Copy {selectedModels.length}</>
-                        )}
-                      </button>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {!scanned && (
-              <div className="glass rounded-2xl p-8 text-center">
+              <div className="flex items-center gap-3 text-xs">
+                {scanned && availableModels.length > 0 && (
+                  <>
+                    <button
+                      onClick={() => setSelectedModels(availableModels.map(m => m.name))}
+                      className="text-violet-400 hover:text-violet-300 transition-colors"
+                    >
+                      Select all
+                    </button>
+                    <span className="text-slate-600">·</span>
+                    <button
+                      onClick={() => setSelectedModels([])}
+                      className="text-slate-500 hover:text-slate-400 transition-colors"
+                    >
+                      Deselect all
+                    </button>
+                    {selectedModels.length > 0 && (
+                      <>
+                        <span className="text-slate-600">·</span>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(selectedModels.join('\n'))
+                            setCopiedModels(true)
+                            setTimeout(() => setCopiedModels(false), 2000)
+                          }}
+                          className="flex items-center gap-1 text-slate-400 hover:text-emerald-400 transition-colors"
+                        >
+                          {copiedModels ? (
+                            <><Check className="w-3 h-3 text-emerald-400" /> Copied!</>
+                          ) : (
+                            <><Copy className="w-3 h-3" /> Copy {selectedModels.length}</>
+                          )}
+                        </button>
+                      </>
+                    )}
+                  </>
+                )}
                 <button
                   onClick={scanModels}
                   disabled={scanning}
-                  className="btn-primary inline-flex items-center gap-2"
+                  className="text-slate-500 hover:text-slate-300 transition-colors"
+                  title="Refresh models"
                 >
-                  {scanning ? (
-                    <RefreshCw className="w-4 h-4 spin-slow" />
-                  ) : (
-                    <RefreshCw className="w-4 h-4" />
-                  )}
-                  {scanning ? 'Scanning Ollama…' : 'Scan for models'}
+                  <RefreshCw className={`w-3.5 h-3.5 ${scanning ? 'spin-slow' : ''}`} />
                 </button>
-                {scanError && (
-                  <div className="mt-4 flex items-center justify-center gap-2 text-red-400 text-sm">
-                    <AlertCircle className="w-4 h-4" />
-                    {scanError}
-                  </div>
-                )}
+              </div>
+            </div>
+
+            {scanning && !scanned && (
+              <div className="glass rounded-2xl p-8 text-center">
+                <RefreshCw className="w-5 h-5 spin-slow text-violet-400 mx-auto mb-2" />
+                <p className="text-sm text-slate-500">Fetching models from Ollama…</p>
+              </div>
+            )}
+
+            {!scanning && !scanned && scanError && (
+              <div className="glass rounded-2xl p-6 text-center">
+                <div className="flex items-center justify-center gap-2 text-red-400 text-sm mb-3">
+                  <AlertCircle className="w-4 h-4" />
+                  {scanError}
+                </div>
+                <button onClick={scanModels} className="btn-primary inline-flex items-center gap-2">
+                  <RefreshCw className="w-4 h-4" />
+                  Retry
+                </button>
               </div>
             )}
 
