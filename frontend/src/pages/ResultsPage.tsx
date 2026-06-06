@@ -699,7 +699,7 @@ Return ONLY a JSON object in this EXACT format (no other text):
   }
 
   return (
-    <div className="min-h-screen p-6 max-w-5xl mx-auto">
+    <div className="min-h-screen p-6 max-w-7xl mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between mb-8 fade-up">
         <div>

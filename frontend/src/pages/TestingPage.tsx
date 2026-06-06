@@ -20,6 +20,8 @@ interface Props {
   image2: ImageData
   onComplete: (results: ModelResult[]) => void
   onBack: () => void
+  sessionId: string
+  onSessionUpdate: (id: string, results: ModelResult[], status: 'running' | 'complete' | 'stopped' | 'partial') => void
 }
 
 interface LiveResult {
@@ -31,6 +33,24 @@ interface LiveResult {
 
 const TEST_COLORS = ['#818cf8', '#34d399', '#fb923c']
 const TEST_LABELS = ['Image 1', 'Image 2', 'Image 1+2']
+const TEST_DESCRIPTIONS = ['Image 1', 'Image 2', 'Image 1 + 2']
+
+function buildModelResults(liveResults: LiveResult[], models: string[]): ModelResult[] {
+  return models
+    .filter(m => liveResults.some(r => r.model === m))
+    .map(model => ({
+      model,
+      tests: liveResults
+        .filter(r => r.model === model)
+        .map(r => ({
+          testNum: r.testNum,
+          description: TEST_DESCRIPTIONS[r.testNum - 1],
+          duration: r.duration,
+          response: r.response,
+        }))
+        .sort((a, b) => a.testNum - b.testNum),
+    }))
+}
 
 function shortName(model: string) {
   return model.length > 14 ? model.slice(0, 13) + '…' : model
@@ -85,7 +105,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   )
 }
 
-export default function TestingPage({ models, prompt, image1, image2, onComplete, onBack }: Props) {
+export default function TestingPage({ models, prompt, image1, image2, onComplete, onBack, sessionId, onSessionUpdate }: Props) {
   const [statuses, setStatuses] = useState<Record<string, ModelStatus>>(
     () => Object.fromEntries(models.map((m) => [m, 'pending'])),
   )
@@ -106,6 +126,7 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
   const testStartRef = useRef<number | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const completedRef = useRef<LiveResult[]>([])
 
   function sendControl(action: 'pause' | 'resume' | 'stop') {
     wsRef.current?.send(JSON.stringify({ action }))
@@ -171,21 +192,22 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
           setPreview(msg.preview)
           break
 
-        case 'test_complete':
+        case 'test_complete': {
           if (elapsedRef.current) clearInterval(elapsedRef.current)
-          setCompleted((prev) => [
-            ...prev,
-            {
-              model: msg.model,
-              testNum: msg.testNum,
-              duration: msg.duration,
-              response: msg.response,
-            },
-          ])
+          const newResult: LiveResult = {
+            model: msg.model,
+            testNum: msg.testNum as 1 | 2 | 3,
+            duration: msg.duration,
+            response: msg.response,
+          }
+          completedRef.current = [...completedRef.current, newResult]
+          setCompleted(completedRef.current)
+          onSessionUpdate(sessionId, buildModelResults(completedRef.current, models), 'running')
           if (msg.testNum === 3) {
             setStatuses((s) => ({ ...s, [msg.model]: 'complete' }))
           }
           break
+        }
 
         case 'paused':
           setIsPaused(true)
@@ -216,11 +238,12 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
           setWasStopped(!!msg.stopped)
           setActiveTest(null)
           setActiveModel(null)
-          const results: ModelResult[] = msg.results
+          const finalResults = buildModelResults(completedRef.current, models)
+          onSessionUpdate(sessionId, finalResults, msg.stopped ? 'stopped' : 'complete')
           if (msg.stopped) {
             setTimeout(() => onBack(), 1000)
           } else {
-            setTimeout(() => onComplete(results), 2500)
+            setTimeout(() => onComplete(finalResults), 2500)
           }
           break
         }
@@ -257,7 +280,7 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
   const overallPct = Math.round((doneTests / totalTests) * 100)
 
   return (
-    <div className="min-h-screen p-6 max-w-5xl mx-auto">
+    <div className="min-h-screen p-6 max-w-7xl mx-auto">
       {/* Header */}
       <div className="flex items-center gap-4 mb-6 fade-up">
         <button onClick={onBack} className="btn-secondary flex items-center gap-2 text-sm py-2 px-4">

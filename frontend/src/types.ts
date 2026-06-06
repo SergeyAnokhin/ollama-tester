@@ -46,3 +46,14 @@ export interface ImageData {
 export type AppPage = 'setup' | 'testing' | 'results';
 
 export type ModelStatus = 'pending' | 'active' | 'complete' | 'error';
+
+export interface Session {
+  id: string
+  startedAt: number
+  status: 'running' | 'complete' | 'stopped' | 'partial'
+  models: string[]
+  prompt: string
+  image1Name: string
+  image2Name: string
+  results: ModelResult[]
+}
