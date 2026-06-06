@@ -113,6 +113,18 @@ async def _run_generate(
     return round(time.monotonic() - start, 2), "".join(tokens)
 
 
+async def _unload_model(model: str) -> None:
+    """Tell Ollama to immediately evict the model from memory."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(
+                f"{OLLAMA_BASE}/api/generate",
+                json={"model": model, "keep_alive": 0},
+            )
+    except Exception:
+        pass
+
+
 @app.websocket("/ws/test")
 async def ws_test(ws: WebSocket):
     await ws.accept()
@@ -131,6 +143,8 @@ async def ws_test(ws: WebSocket):
     except Exception:
         return
 
+    current_task: list[asyncio.Task] = []  # holds the active _run_generate task
+
     async def _listen_controls() -> None:
         """Receives pause/resume/stop messages from client while tests run."""
         while not done_event.is_set():
@@ -146,6 +160,8 @@ async def ws_test(ws: WebSocket):
                 elif action == "stop":
                     stop_event.set()
                     paused_event.set()  # unblock if currently paused
+                    if current_task:
+                        current_task[0].cancel()  # abort running Ollama request
                     await ws.send_json({"type": "stopping"})
             except Exception:
                 break
@@ -203,12 +219,23 @@ async def ws_test(ws: WebSocket):
                         "description": desc,
                     }
                 )
+
+                task = asyncio.create_task(
+                    _run_generate(model, prompt, images, ws, test_num)
+                )
+                current_task.clear()
+                current_task.append(task)
                 try:
-                    duration, response = await _run_generate(
-                        model, prompt, images, ws, test_num
-                    )
+                    duration, response = await task
+                except asyncio.CancelledError:
+                    # Stop was pressed: kill Ollama model and exit immediately
+                    asyncio.create_task(_unload_model(model))
+                    model_stopped = True
+                    break
                 except Exception as exc:
                     duration, response = 0.0, f"Error: {exc}"
+                finally:
+                    current_task.clear()
 
                 await ws.send_json(
                     {

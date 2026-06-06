@@ -101,6 +101,7 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
   const [isStopping, setIsStopping] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState({ modelIdx: 0, total: models.length })
+  const [selectedModel, setSelectedModel] = useState<string | null>(null)
 
   const testStartRef = useRef<number | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -131,6 +132,7 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
     wsRef.current = ws
 
     ws.onopen = () => {
+      setError(null)
       ws.send(
         JSON.stringify({
           models,
@@ -215,7 +217,11 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
           setActiveTest(null)
           setActiveModel(null)
           const results: ModelResult[] = msg.results
-          setTimeout(() => onComplete(results), 2500)
+          if (msg.stopped) {
+            setTimeout(() => onBack(), 1000)
+          } else {
+            setTimeout(() => onComplete(results), 2500)
+          }
           break
         }
 
@@ -335,8 +341,9 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
       )}
 
       {error && (
-        <div className="glass rounded-xl p-4 mb-6 border border-red-500/30 text-red-400 text-sm fade-up">
-          ⚠ {error}
+        <div className="glass rounded-xl p-4 mb-6 border border-red-500/30 text-red-400 text-sm fade-up flex items-center justify-between">
+          <span>⚠ {error}</span>
+          <button onClick={() => setError(null)} className="ml-4 text-slate-500 hover:text-slate-300 transition-colors text-lg leading-none">×</button>
         </div>
       )}
 
@@ -393,14 +400,21 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
               const isActive = status === 'active'
               const isDone = status === 'complete'
               const modelCompleted = completed.filter((r) => r.model === m)
+              const isSelected = selectedModel === m
+              const hasResults = modelCompleted.length > 0
               return (
                 <div
                   key={m}
+                  onClick={() => hasResults && setSelectedModel(isSelected ? null : m)}
                   className={`rounded-xl px-3 py-2.5 flex items-center gap-3 transition-all duration-300 ${
-                    isActive
+                    hasResults ? 'cursor-pointer' : ''
+                  } ${
+                    isSelected
+                      ? 'bg-blue-500/15 ring-1 ring-blue-500/50'
+                      : isActive
                       ? 'bg-violet-500/15 ring-1 ring-violet-500/50 pulse-glow'
                       : isDone
-                      ? 'bg-emerald-500/10'
+                      ? 'bg-emerald-500/10 hover:bg-emerald-500/15'
                       : 'bg-slate-800/40'
                   }`}
                 >
@@ -441,9 +455,44 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
           </div>
         </div>
 
-        {/* Current Test Info */}
+        {/* Right panel: selected model responses OR live test */}
         <div className="lg:col-span-2 glass rounded-2xl p-4 fade-up flex flex-col">
-          {activeModel && activeTest ? (
+          {selectedModel ? (
+            <>
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <p className="text-xs text-slate-500 uppercase tracking-wider">Results</p>
+                  <p className="text-sm font-bold text-white mt-0.5">{selectedModel}</p>
+                </div>
+                <button
+                  onClick={() => setSelectedModel(null)}
+                  className="text-xs text-slate-400 hover:text-white transition-colors flex items-center gap-1"
+                >
+                  ← Live view
+                </button>
+              </div>
+              <div className="flex flex-col gap-2 overflow-y-auto flex-1">
+                {([1, 2, 3] as const).map((n) => {
+                  const result = completed.find((r) => r.model === selectedModel && r.testNum === n)
+                  return (
+                    <div key={n} className={`rounded-xl p-3 ${result ? 'bg-slate-800/60' : 'bg-slate-800/20'}`}>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-xs font-semibold" style={{ color: TEST_COLORS[n - 1] }}>
+                          {TEST_LABELS[n - 1]}
+                        </span>
+                        {result && (
+                          <span className="text-xs font-mono text-slate-400">{result.duration.toFixed(2)}s</span>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap break-words max-h-28 overflow-y-auto">
+                        {result ? result.response : <span className="text-slate-600">Not yet completed</span>}
+                      </p>
+                    </div>
+                  )
+                })}
+              </div>
+            </>
+          ) : activeModel && activeTest ? (
             <>
               <div className="flex items-center justify-between mb-3">
                 <div>
@@ -548,9 +597,7 @@ export default function TestingPage({ models, prompt, image1, image2, onComplete
                   name={label}
                   fill={TEST_COLORS[i]}
                   radius={[4, 4, 0, 0]}
-                  isAnimationActive
-                  animationDuration={800}
-                  animationEasing="ease-out"
+                  isAnimationActive={false}
                 >
                   {chartData.map((entry, idx) => (
                     <Cell

@@ -6,9 +6,10 @@ Watch results build live in an animated chart, then export + compare with extern
 
 ## Quick Start
 
-```powershell
-# Windows — opens two terminal windows
-.\start.ps1
+```bash
+# any shell (bash, PowerShell, cmd) — logs from both servers in one terminal
+npm install
+npm run dev
 ```
 
 Then open **http://localhost:5173** in your browser.
