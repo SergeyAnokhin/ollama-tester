@@ -44,7 +44,7 @@ Or start manually in two terminals:
 # Terminal 1 — backend
 cd backend
 pip install -r requirements.txt
-uvicorn main:app --reload --host 0.0.0.0 --port 8001
+uvicorn main:app --reload --host 0.0.0.0 --port 8002
 
 # Terminal 2 — frontend
 cd frontend
@@ -90,7 +90,7 @@ Or start manually:
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn main:app --reload --host 0.0.0.0 --port 8001
+uvicorn main:app --reload --host 0.0.0.0 --port 8002
 
 # Terminal 2 — frontend
 cd frontend
@@ -130,7 +130,7 @@ cd ollama-tester
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8001 &
+uvicorn main:app --host 0.0.0.0 --port 8002 &
 
 cd ../frontend
 npm install
@@ -225,8 +225,8 @@ The backend streams Ollama responses token-by-token over a WebSocket, sending sy
 
 | Problem | Fix |
 |---------|-----|
-| "Python backend не запущен" | Run `cd backend && uvicorn main:app --port 8001` |
+| "Python backend не запущен" | Run `cd backend && uvicorn main:app --port 8002` |
 | Ollama dot is grey/blinking | Make sure `ollama serve` is running |
 | Model returns error | Only vision models work (llava, moondream, minicpm-v, bakllava) |
 | Slow inference on Pi | Use `moondream` (800MB) instead of `llava:7b` (4GB+) |
-| Port 8001 already in use | Kill existing process or change port in `vite.config.ts` and backend command |
+| Port 8002 already in use | Kill existing process or change port in `vite.config.ts` and backend command |

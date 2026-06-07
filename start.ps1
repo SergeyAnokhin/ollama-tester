@@ -7,7 +7,7 @@ Write-Host "Ctrl+C to stop.`n" -ForegroundColor Gray
 $backendJob = Start-Job -ScriptBlock {
     param($p)
     Set-Location $p
-    cmd /c "pip install -r requirements.txt -q 2>&1 && uvicorn main:app --reload --host 0.0.0.0 --port 8001 2>&1"
+    cmd /c "pip install -r requirements.txt -q 2>&1 && uvicorn main:app --reload --host 0.0.0.0 --port 8002 2>&1"
 } -ArgumentList $backendPath
 
 $frontendJob = Start-Job -ScriptBlock {

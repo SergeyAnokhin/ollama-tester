@@ -1,6 +1,6 @@
 # Architecture
 
-Ollama Vision Tester is a React + FastAPI app. The frontend runs on port 5173, the backend on port 8001. Vite proxies `/api` to the backend. The core interaction is a WebSocket (`/ws/test`) that streams Ollama inference token-by-token.
+Ollama Vision Tester is a React + FastAPI app. The frontend runs on port 5173, the backend on port 8002. Vite proxies `/api` to the backend. The core interaction is a WebSocket (`/ws/test`) that streams Ollama inference token-by-token.
 
 ---
 
@@ -15,7 +15,7 @@ frontend/src/
   types.ts            All shared TypeScript interfaces (Session, LlmParams, ModelResult…)
   uuid.ts             UUID v4 utility
   pages/
-    SetupPage.tsx     Model scan, prompt, images, LLM params, session name, history sidebar
+    SetupPage.tsx     Model scan (auto on mount), prompt, images, LLM params, session name, history sidebar
     TestingPage.tsx   WebSocket connection, live chart, system stats, pause/resume/stop
     ResultsPage.tsx   Duration chart, response browser, export JSON, Gemini eval, import eval
 ```
@@ -36,7 +36,7 @@ SetupPage  →  (onStart)  →  TestingPage  →  (onComplete)  →  ResultsPage
 
 **Session history** lives in `sessions: Session[]` in App — persisted to `localStorage['ollama-tester-sessions-v1']`. Max 20 entries. Sessions get `status: 'partial'` when app reopens with an interrupted run.
 
-**Setup state** (models, prompt, images, llmParams, sessionName) persisted to `localStorage['ollama-tester-v1']`.
+**Setup state** (models, prompt, images, llmParams, sessionName) persisted to `localStorage['ollama-tester-v1']`. On mount, SetupPage auto-scans models and restores the saved selection (filtering out any models no longer available); if none match, all are selected.
 
 ---
 

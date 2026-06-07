@@ -170,7 +170,7 @@ export default function TestingPage({ models, prompt, image1, image2, image3, im
   }
 
   useEffect(() => {
-    const ws = new WebSocket(`ws://localhost:8001/ws/test`)
+    const ws = new WebSocket(`ws://localhost:8002/ws/test`)
     wsRef.current = ws
 
     ws.onopen = () => {
@@ -279,7 +279,7 @@ export default function TestingPage({ models, prompt, image1, image2, image3, im
       }
     }
 
-    ws.onerror = () => setError('WebSocket connection failed — is the backend running on port 8001?')
+    ws.onerror = () => setError('WebSocket connection failed — is the backend running on port 8002?')
 
     return () => {
       if (elapsedRef.current) clearInterval(elapsedRef.current)

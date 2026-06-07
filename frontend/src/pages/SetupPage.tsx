@@ -573,21 +573,21 @@ export default function SetupPage({
     setScanError(null)
     try {
       const r = await fetch('/api/models').catch(() => {
-        throw new Error('Python backend не запущен. Запустите: cd backend && uvicorn main:app --port 8001')
+        throw new Error('Python backend не запущен. Запустите: cd backend && uvicorn main:app --port 8002')
       })
       if (!r.ok) {
-        throw new Error(`Python backend вернул HTTP ${r.status}. Запустите: cd backend && uvicorn main:app --port 8001`)
+        throw new Error(`Python backend вернул HTTP ${r.status}. Запустите: cd backend && uvicorn main:app --port 8002`)
       }
       const text = await r.text()
       let data: { models?: ModelInfo[]; error?: string }
       try {
         data = JSON.parse(text)
       } catch {
-        throw new Error('Backend вернул неверный ответ. Убедитесь что uvicorn запущен на порту 8001')
+        throw new Error('Backend вернул неверный ответ. Убедитесь что uvicorn запущен на порту 8002')
       }
       if (data.error) throw new Error(`Ollama: ${data.error}`)
       if (!Array.isArray(data.models)) {
-        throw new Error('Запустите Python backend: cd backend && uvicorn main:app --port 8001')
+        throw new Error('Запустите Python backend: cd backend && uvicorn main:app --port 8002')
       }
       setAvailableModels(data.models)
       const newNames = data.models.map(m => m.name)
@@ -648,7 +648,7 @@ export default function SetupPage({
             <div className="flex items-center gap-2 text-xs">
               <ServiceDot ok={backendOk} checking={healthChecking} />
               <span className={backendOk ? 'text-slate-300' : 'text-slate-500'}>Python backend</span>
-              <code className="text-slate-500 bg-slate-800 rounded px-1.5 py-0.5">cd backend &amp;&amp; uvicorn main:app --port 8001</code>
+              <code className="text-slate-500 bg-slate-800 rounded px-1.5 py-0.5">cd backend &amp;&amp; uvicorn main:app --port 8002</code>
             </div>
           </div>
 
