@@ -353,6 +353,16 @@ const STATUS_LABEL: Record<Session['status'], string> = {
   partial: 'Partial',
 }
 
+function formatDuration(sec: number): string {
+  if (sec < 60) return `${Math.round(sec)}s`
+  const m = Math.floor(sec / 60)
+  const s = Math.round(sec % 60)
+  if (m < 60) return s > 0 ? `${m}m ${s}s` : `${m}m`
+  const h = Math.floor(m / 60)
+  const rm = m % 60
+  return rm > 0 ? `${h}h ${rm}m` : `${h}h`
+}
+
 function formatParamsSummary(p?: LlmParams): string | null {
   if (!p) return null
   const parts: string[] = []
@@ -380,6 +390,7 @@ function SessionCard({
   const totalTests = session.models.length * 3
   const doneTests = session.results.reduce((s, r) => s + r.tests.length, 0)
   const pct = totalTests > 0 ? Math.round((doneTests / totalTests) * 100) : 0
+  const totalSec = session.results.flatMap(r => r.tests).reduce((s, t) => s + t.duration, 0)
   const isComplete = session.status === 'complete'
   const modelNames = session.models.map(m => m.split(':')[0])
   const shownNames = modelNames.slice(0, 2).join(', ')
@@ -461,7 +472,10 @@ function SessionCard({
       <div className="mb-2.5">
         <div className="flex justify-between text-[10px] text-slate-600 mb-1">
           <span>{session.models.length} models</span>
-          <span>{doneTests}/{totalTests} tests</span>
+          <span className="flex items-center gap-2">
+            {totalSec > 0 && <span className="text-slate-700">{formatDuration(totalSec)}</span>}
+            <span>{doneTests}/{totalTests} tests</span>
+          </span>
         </div>
         <div className="h-1 bg-slate-800 rounded-full overflow-hidden">
           <div

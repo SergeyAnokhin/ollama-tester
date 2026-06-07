@@ -97,16 +97,23 @@ function getTestMeta(results: ModelResult[]) {
   return defs
 }
 
-function shortName(model: string, max = 12) {
-  const name = model.split(':')[0]
-  return name.length > max ? name.slice(0, max - 1) + '…' : name
+function shortName(model: string, max = 18) {
+  if (model.length <= max) return model
+  const colonIdx = model.indexOf(':')
+  if (colonIdx === -1) return model.slice(0, max - 1) + '…'
+  const base = model.slice(0, colonIdx)
+  const tag = model.slice(colonIdx + 1)
+  if (tag.length + 2 >= max) return model.slice(0, max - 1) + '…'
+  const baseMax = max - tag.length - 1
+  const shortBase = base.length <= baseMax ? base : base.slice(0, baseMax - 1) + '…'
+  return shortBase + ':' + tag
 }
 
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (!active || !payload?.length) return null
   return (
     <div className="glass rounded-xl p-3 text-xs shadow-xl border border-white/10">
-      <p className="font-semibold text-white mb-2">{label}</p>
+      <p className="font-semibold text-white mb-2">{payload[0]?.payload?.fullName ?? label}</p>
       {payload.map((p: any, i: number) => (
         <div key={i} className="flex items-center gap-2 mb-1">
           <div className="w-2 h-2 rounded-full" style={{ background: p.fill }} />
